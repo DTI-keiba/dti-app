@@ -8,6 +8,20 @@ def format_time(seconds):
     s = seconds % 60
     return f"{m}:{s:04.1f}"
 
+# --- 競馬場ごとの物理パラメータ設定 ---
+COURSE_DATA = {
+    "東京": {"curve_penalty": 0.10, "slope_bonus": 0.2, "straight_len": 525, "note": "広大な直線、コーナーロス中"},
+    "中山": {"curve_penalty": 0.25, "slope_bonus": 0.5, "straight_len": 310, "note": "急坂と小回り、コーナーロス大"},
+    "京都": {"curve_penalty": 0.15, "slope_bonus": 0.0, "straight_len": 404, "note": "平坦、3角の坂での加速性能重視"},
+    "阪神": {"curve_penalty": 0.18, "slope_bonus": 0.4, "straight_len": 473, "note": "外回りは長く、内回りは急坂"},
+    "中京": {"curve_penalty": 0.20, "slope_bonus": 0.4, "straight_len": 412, "note": "スパイラルカーブ、急坂あり"},
+    "新潟": {"curve_penalty": 0.05, "slope_bonus": 0.0, "straight_len": 658, "note": "日本最大の直線、外枠有利傾向"},
+    "小倉": {"curve_penalty": 0.30, "slope_bonus": 0.1, "straight_len": 293, "note": "超小回り、遠心力負荷が最大"},
+    "福島": {"curve_penalty": 0.28, "slope_bonus": 0.2, "straight_len": 272, "note": "小回り、スパイラルカーブ"},
+    "札幌": {"curve_penalty": 0.22, "slope_bonus": 0.0, "straight_len": 266, "note": "全周洋芝、ほぼ平坦だがコーナーきつい"},
+    "函館": {"curve_penalty": 0.25, "slope_bonus": 0.1, "straight_len": 262, "note": "洋芝、小回りで高低差あり"}
+}
+
 def calculate_pace_info(lap_text):
     laps = re.findall(r'(\d{2}\.\d)', lap_text)
     if len(laps) < 4: return 0.0, "平均ペース"
@@ -22,64 +36,64 @@ def calculate_pace_info(lap_text):
     else: cat = "平均"
     return diff, cat
 
-def calculate_ultimate_rtc(actual_sec, corner, weight, cushion, slope, bias_val, rank, pace_diff, avg_top_corner, water_4c, water_goal, track_type):
+def calculate_ultimate_rtc(actual_sec, corner, weight, cushion, bias_val, rank, pace_diff, avg_top_corner, water_4c, water_goal, track_type, course_name):
     try:
-        # 基本物理補正
-        dist_loss = (corner - 1) * 0.15 
-        w_penalty = (weight - 56.0) * 0.2
-        s_penalty = 0.2 if slope else 0.0 
+        c_info = COURSE_DATA[course_name]
         
-        # 種別による馬場ロジックの切り替え
+        # 1. 競馬場別コーナーロス：小回りほど外を回る距離損を重く計算
+        dist_loss = (corner - 1) * c_info["curve_penalty"]
+        
+        # 2. 坂の負荷：中山や阪神などの急坂による減速分を補正
+        slope_impact = c_info["slope_bonus"] if rank <= 5 else 0.0
+        
+        # 3. 芝・ダート別の馬場補正
         if track_type == "芝":
-            # 芝はクッション値が低い（柔らかい）ほどパワーが必要
             turf_impact = (9.5 - cushion) * 0.15
-            water_impact = (water_4c + water_goal - 30.0) * 0.03 # 芝は濡れると重くなる
+            water_impact = (water_4c + water_goal - 30.0) * 0.03
         else:
-            # ダートはクッション値設定がないため無視
             turf_impact = 0.0
-            # ダートは含水率が高いほど砂が固まり「脚抜き」が良くなってタイムが速くなる
             water_impact = (15.0 - (water_4c + water_goal) / 2) * -0.12 
         
-        # 逆行判定ボーナス
+        # 4. 逆行判定ボーナス（コース特性加味）
         reversal_notes = []
         pace_bonus = 0.0
+        # 中山などの小回りで後ろから来た馬はボーナスUP
+        corner_bonus_val = 0.5 if c_info["curve_penalty"] >= 0.25 else 0.3
+
         if pace_diff < -0.5 and corner >= 8 and rank <= 5:
             reversal_notes.append("ペース逆行(追)")
-            pace_bonus += 0.3
+            pace_bonus += corner_bonus_val
         elif pace_diff > 0.5 and corner <= 3 and rank <= 5:
             reversal_notes.append("ペース逆行(粘)")
             pace_bonus += 0.4
 
         if avg_top_corner <= 4.0 and corner >= 10 and rank <= 5:
             reversal_notes.append("バイアス逆行(外)")
-            pace_bonus += 0.3
+            pace_bonus += corner_bonus_val
         elif avg_top_corner >= 10.0 and corner <= 3 and rank <= 5:
             reversal_notes.append("バイアス逆行(内)")
             pace_bonus += 0.4
 
-        rtc_sec = actual_sec - dist_loss - w_penalty - s_penalty - turf_impact - water_impact + bias_val - pace_bonus
+        rtc_sec = actual_sec - dist_loss - (weight-56.0)*0.2 - slope_impact - turf_impact - water_impact + bias_val - pace_bonus
         return rtc_sec, reversal_notes
     except:
         return None, None
 
-st.set_page_config(page_title="DTI Hybrid Analytics", layout="wide")
-st.title("🚀 DTI - Hybrid Surface Analyzer")
+# --- UI ---
+st.set_page_config(page_title="DTI Course Engine", layout="wide")
+st.title("🚀 DTI - Course Intelligence Analyzer")
 
-# --- サイドバー：馬場詳細設定 ---
-st.sidebar.header("🏇 レース種別")
+st.sidebar.header("📍 レース場所")
+course_name = st.sidebar.selectbox("競馬場", list(COURSE_DATA.keys()))
 track_type = st.sidebar.radio("トラック種別", ["芝", "ダート"])
 
-st.sidebar.header("📝 馬場環境設定")
-if track_type == "芝":
-    cushion_val = st.sidebar.slider("クッション値", 7.0, 12.0, 9.5, 0.1)
-else:
-    st.sidebar.info("ダートは含水率を重視します")
-    cushion_val = 9.5 # ダート時は定数化
+st.sidebar.markdown(f"**【コース特徴】** \n{COURSE_DATA[course_name]['note']}")
 
+st.sidebar.header("📝 環境設定")
+cushion_val = st.sidebar.slider("クッション値", 7.0, 12.0, 9.5, 0.1) if track_type == "芝" else 9.5
 water_4c = st.sidebar.slider("含水率（4角）%", 0.0, 30.0, 10.0, 0.1)
 water_goal = st.sidebar.slider("含水率（ゴール前）%", 0.0, 30.0, 10.0, 0.1)
 track_bias = st.sidebar.slider("馬場補正 (秒)", -1.0, 1.0, 0.0, 0.1)
-slope_exists = st.sidebar.checkbox("直線の急坂あり")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -87,7 +101,7 @@ with col1:
 with col2:
     raw_data = st.text_area("JRA成績表", height=100)
 
-if st.button("🚀 総合解析実行"):
+if st.button("🚀 競馬場特性×物理解析実行"):
     if raw_data and lap_data:
         p_diff, p_cat = calculate_pace_info(lap_data)
         clean_text = re.sub(r'\s+', ' ', raw_data)
@@ -96,7 +110,7 @@ if st.button("🚀 総合解析実行"):
         pre_data = []
         top_corners = []
         
-        for i, m in enumerate(matches):
+        for m in matches:
             time_str = m.group(1)
             before = clean_text[max(0, m.start()-100):m.start()]
             after = clean_text[m.end():min(len(clean_text), m.end()+100)]
@@ -106,6 +120,7 @@ if st.button("🚀 総合解析実行"):
             m_p, s_p = map(float, time_str.split(':'))
             actual_sec = m_p * 60 + s_p
             
+            # 4角位置抽出
             actual_3f = 0.0
             floats_after = re.findall(r'(\d{2}\.\d)', after)
             for f in floats_after:
@@ -127,11 +142,11 @@ if st.button("🚀 総合解析実行"):
             pre_data.append([name, corner, weight, actual_sec, actual_3f, rank])
 
         avg_top = sum(top_corners) / len(top_corners) if top_corners else 5.0
-        st.info(f"📊 {track_type} | 展開: {p_cat} | 上位平均: {avg_top:.1f}番手")
+        st.info(f"🏟️ {course_name} {track_type} | 展開: {p_cat} | 上位平均: {avg_top:.1f}番手")
 
         results = []
         for d in pre_data:
-            rtc, notes = calculate_ultimate_rtc(d[3], d[1], d[2], cushion_val, slope_exists, track_bias, d[5], p_diff, avg_top, water_4c, water_goal, track_type)
+            rtc, notes = calculate_ultimate_rtc(d[3], d[1], d[2], cushion_val, track_bias, d[5], p_diff, avg_top, water_4c, water_goal, track_type, course_name)
             if rtc:
                 results.append({
                     "着順": d[5], "馬名": d[0], "4角": f"{d[1]}番手",
@@ -142,4 +157,4 @@ if st.button("🚀 総合解析実行"):
             df = pd.DataFrame(results).sort_values(by="rtc_raw").reset_index(drop=True)
             df.index += 1
             st.table(df.drop(columns=['rtc_raw']))
-            st.success(f"✅ {track_type}専用ロジックで解析を完了しました。")
+            st.success(f"✅ {course_name}のコースレイアウトを考慮したRTC算出が完了しました。")
