@@ -16,8 +16,9 @@ def get_db_data():
     except:
         return pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp"])
 
+# --- タイム表示を「分:秒.1桁」に変換する関数 (RTC用) ---
 def format_time(seconds):
-    if seconds is None: return ""
+    if seconds is None or seconds <= 0: return ""
     m = int(seconds // 60)
     s = seconds % 60
     return f"{m}:{s:04.1f}"
@@ -37,12 +38,15 @@ with tab1:
         r_name = st.text_input("レース名")
         c_name = st.selectbox("競馬場", list(COURSE_DATA.keys()))
         t_type = st.radio("種別", ["芝", "ダート"])
-        dist = st.number_input("距離 (m)", 800, 4000, 1600)
         
-        # --- 含水率の個別設定 (ここを改良) ---
+        # --- 距離を100m単位で選択 (改良) ---
+        dist_options = list(range(1000, 3700, 100))
+        dist = st.selectbox("距離 (m)", dist_options, index=dist_options.index(1600))
+        
         st.divider()
         st.write("💧 馬場コンディション")
-        cush = st.slider("クッション値", 7.0, 12.0, 9.5) if t_type == "芝" else 9.5
+        # --- クッション値を0.1刻みの数値入力に変更 (改良) ---
+        cush = st.number_input("クッション値", 7.0, 12.0, 9.5, step=0.1) if t_type == "芝" else 9.5
         w_4c = st.slider("含水率：4角 (%)", 0.0, 30.0, 10.0)
         w_goal = st.slider("含水率：ゴール前 (%)", 0.0, 30.0, 10.0)
         bias = st.slider("馬場補正 (秒)", -1.0, 1.0, 0.0)
@@ -66,26 +70,25 @@ with tab1:
                 name = "不明"; weight = 56.0
                 if weight_m:
                     weight = float(weight_m.group(1))
-                    # 斤量(56.0等)の直前にあるカタカナのみを馬名として認識
                     parts = re.findall(r'([ァ-ヶー]{2,})', before[:weight_m.start()])
                     if parts: name = parts[-1]
                 
-                # --- RTC計算ロジック (改良版含水率反映) ---
+                # --- RTC計算ロジック ---
                 m_p, s_p = map(float, time_str.split(':'))
                 sec = m_p * 60 + s_p
                 
-                # 物理補正
                 c_penalty = COURSE_DATA.get(c_name, 0.2)
                 stamina_f = dist / 1600.0
                 
-                # 水分影響の計算 (4角とゴール前の平均値で算出)
                 avg_water = (w_4c + w_goal) / 2
                 if t_type == "芝":
                     water_impact = (avg_water - 10.0) * 0.05
+                    cush_impact = (9.5 - cush) * 0.1 # クッション値の補正を計算に含める
                 else:
                     water_impact = (12.0 - avg_water) * -0.10
+                    cush_impact = 0
                 
-                rtc = sec + bias - (weight-56)*0.1 - water_impact
+                rtc = sec + bias - (weight-56)*0.1 - water_impact - cush_impact
                 
                 new_rows.append({
                     "name": name,
@@ -101,7 +104,7 @@ with tab1:
                 existing_df = get_db_data()
                 updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success(f"✅ {len(new_rows)}頭のデータをスプレッドシートへ保存しました！")
+                st.success(f"✅ {len(new_rows)}頭のデータを保存しました！")
 
 with tab2:
     st.header("📊 馬別履歴データベース")
@@ -110,7 +113,11 @@ with tab2:
         search = st.text_input("馬名で検索")
         if search:
             df = df[df['name'].str.contains(search)]
-        st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True)
+        
+        # --- 表示用にRTCを「分:秒.1桁」に変換して表示 (改良) ---
+        display_df = df.copy()
+        display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
+        st.dataframe(display_df.sort_values("timestamp", ascending=False), use_container_width=True)
     else:
         st.info("データがまだありません。")
 
