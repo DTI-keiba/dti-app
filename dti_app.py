@@ -30,8 +30,7 @@ COURSE_DATA = {
 }
 
 # --- メイン UI ---
-# タブ構成に「レース別」の視点を追加
-tab1, tab2, tab3, tab4 = st.tabs(["📝 解析・保存", "🐎 馬別履歴", "🏁 レース別履歴", "🎯 シミュレーター"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 解析・保存", "🐎 馬別履歴", "🏁 レース別履歴", "🎯 シミュレーター", "🗑 データ管理"])
 
 with tab1:
     st.header("🚀 レース解析 & 自動保存")
@@ -39,10 +38,8 @@ with tab1:
         r_name = st.text_input("レース名")
         c_name = st.selectbox("競馬場", list(COURSE_DATA.keys()))
         t_type = st.radio("種別", ["芝", "ダート"])
-        
         dist_options = list(range(1000, 3700, 100))
         dist = st.selectbox("距離 (m)", dist_options, index=dist_options.index(1600))
-        
         st.divider()
         st.write("💧 馬場コンディション")
         cush = st.number_input("クッション値", 7.0, 12.0, 9.5, step=0.1) if t_type == "芝" else 9.5
@@ -58,25 +55,19 @@ with tab1:
         if raw_input:
             clean_text = re.sub(r'\s+', ' ', raw_input)
             matches = list(re.finditer(r'(\d{1,2}:\d{2}\.\d)', clean_text))
-            
             new_rows = []
             for m in matches:
                 time_str = m.group(1)
                 before = clean_text[max(0, m.start()-100):m.start()]
-                
                 weight_m = re.search(r'(\d{2}\.\d)', before)
                 name = "不明"; weight = 56.0
                 if weight_m:
                     weight = float(weight_m.group(1))
                     parts = re.findall(r'([ァ-ヶー]{2,})', before[:weight_m.start()])
                     if parts: name = parts[-1]
-                
                 m_p, s_p = map(float, time_str.split(':'))
                 sec = m_p * 60 + s_p
-                
-                c_penalty = COURSE_DATA.get(c_name, 0.2)
                 stamina_f = dist / 1600.0
-                
                 avg_water = (w_4c + w_goal) / 2
                 if t_type == "芝":
                     water_impact = (avg_water - 10.0) * 0.05
@@ -84,19 +75,12 @@ with tab1:
                 else:
                     water_impact = (12.0 - avg_water) * -0.10
                     cush_impact = 0
-                
                 rtc = sec + bias - (weight-56)*0.1 - water_impact - cush_impact
-                
                 new_rows.append({
-                    "name": name,
-                    "base_rtc": rtc,
-                    "last_race": r_name,
-                    "course": c_name,
-                    "dist": dist,
-                    "notes": f"4角{w_4c}%/G前{w_goal}%",
+                    "name": name, "base_rtc": rtc, "last_race": r_name,
+                    "course": c_name, "dist": dist, "notes": f"4角{w_4c}%/G前{w_goal}%",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
                 })
-            
             if new_rows:
                 existing_df = get_db_data()
                 updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
@@ -109,29 +93,20 @@ with tab2:
     if not df.empty:
         search_horse = st.text_input("馬名で検索", key="search_h")
         display_df = df.copy()
-        if search_horse:
-            display_df = display_df[display_df['name'].str.contains(search_horse)]
-        
+        if search_horse: display_df = display_df[display_df['name'].str.contains(search_horse)]
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
         st.dataframe(display_df.sort_values(["name", "timestamp"], ascending=[True, False]), use_container_width=True)
-    else:
-        st.info("データがありません。")
 
 with tab3:
     st.header("🏁 レース別履歴データベース")
     df = get_db_data()
     if not df.empty:
-        # 登録されているレース名のリストを取得
         race_list = sorted(df['last_race'].unique())
         selected_race = st.selectbox("表示するレースを選択", race_list)
-        
         if selected_race:
             race_df = df[df['last_race'] == selected_race].copy()
             race_df['base_rtc'] = race_df['base_rtc'].apply(format_time)
-            # RTCが良い順に並び替えて表示
             st.dataframe(race_df.sort_values("base_rtc"), use_container_width=True)
-    else:
-        st.info("データがありません。")
 
 with tab4:
     st.header("🎯 次走シミュレーター")
@@ -146,6 +121,36 @@ with tab4:
                     h_data = df[df['name'] == h].iloc[-1]
                     sim_rtc = h_data['base_rtc'] + (COURSE_DATA[target_c] * (h_data['dist']/1600.0))
                     results.append({"馬名": h, "想定RTC": format_time(sim_rtc), "raw": sim_rtc})
-                
                 res_df = pd.DataFrame(results).sort_values("raw")
                 st.table(res_df[["馬名", "想定RTC"]])
+
+with tab5:
+    st.header("🗑 データの削除（管理用）")
+    df = get_db_data()
+    if not df.empty:
+        st.warning("※削除したデータは復元できません。")
+        delete_mode = st.radio("削除単位を選択", ["レース単位で削除", "特定の馬の全データを削除"])
+        
+        if delete_mode == "レース単位で削除":
+            target_race = st.selectbox("削除するレースを選択", sorted(df['last_race'].unique()))
+            if st.button(f"🚨 {target_race} の全データを削除する（確認）"):
+                st.session_state['delete_confirm'] = True
+                st.error("【最終確認】本当によろしいですか？下のボタンを押すと確定します。")
+                if st.button("✅ はい、完全に削除します（実行）"):
+                    new_df = df[df['last_race'] != target_race]
+                    conn.update(data=new_df)
+                    st.success(f"{target_race} を削除しました。")
+                    st.rerun()
+
+        else:
+            target_horse = st.selectbox("削除する馬を選択", sorted(df['name'].unique()))
+            if st.button(f"🚨 {target_horse} の全データを削除する（確認）"):
+                st.session_state['delete_confirm_h'] = True
+                st.error(f"【最終確認】{target_horse} の履歴すべてが消去されます。よろしいですか？")
+                if st.button("✅ はい、完全に削除します（実行）"):
+                    new_df = df[df['name'] != target_horse]
+                    conn.update(data=new_df)
+                    st.success(f"{target_horse} を削除しました。")
+                    st.rerun()
+    else:
+        st.info("データがありません。")
