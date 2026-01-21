@@ -16,7 +16,7 @@ def get_db_data():
     except:
         return pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp"])
 
-# --- タイム表示を「分:秒.1桁」に変換する関数 (RTC用) ---
+# --- タイム表示を「分:秒.1桁」に変換する関数 ---
 def format_time(seconds):
     if seconds is None or seconds <= 0: return ""
     m = int(seconds // 60)
@@ -30,7 +30,8 @@ COURSE_DATA = {
 }
 
 # --- メイン UI ---
-tab1, tab2, tab3 = st.tabs(["📝 レース解析・保存", "📊 馬別履歴データベース", "🎯 次走シミュレーター"])
+# タブ構成に「レース別」の視点を追加
+tab1, tab2, tab3, tab4 = st.tabs(["📝 解析・保存", "🐎 馬別履歴", "🏁 レース別履歴", "🎯 シミュレーター"])
 
 with tab1:
     st.header("🚀 レース解析 & 自動保存")
@@ -39,13 +40,11 @@ with tab1:
         c_name = st.selectbox("競馬場", list(COURSE_DATA.keys()))
         t_type = st.radio("種別", ["芝", "ダート"])
         
-        # --- 距離を100m単位で選択 (改良) ---
         dist_options = list(range(1000, 3700, 100))
         dist = st.selectbox("距離 (m)", dist_options, index=dist_options.index(1600))
         
         st.divider()
         st.write("💧 馬場コンディション")
-        # --- クッション値を0.1刻みの数値入力に変更 (改良) ---
         cush = st.number_input("クッション値", 7.0, 12.0, 9.5, step=0.1) if t_type == "芝" else 9.5
         w_4c = st.slider("含水率：4角 (%)", 0.0, 30.0, 10.0)
         w_goal = st.slider("含水率：ゴール前 (%)", 0.0, 30.0, 10.0)
@@ -65,7 +64,6 @@ with tab1:
                 time_str = m.group(1)
                 before = clean_text[max(0, m.start()-100):m.start()]
                 
-                # --- 精密馬名抽出ロジック (外国人ジョッキー除外) ---
                 weight_m = re.search(r'(\d{2}\.\d)', before)
                 name = "不明"; weight = 56.0
                 if weight_m:
@@ -73,7 +71,6 @@ with tab1:
                     parts = re.findall(r'([ァ-ヶー]{2,})', before[:weight_m.start()])
                     if parts: name = parts[-1]
                 
-                # --- RTC計算ロジック ---
                 m_p, s_p = map(float, time_str.split(':'))
                 sec = m_p * 60 + s_p
                 
@@ -83,7 +80,7 @@ with tab1:
                 avg_water = (w_4c + w_goal) / 2
                 if t_type == "芝":
                     water_impact = (avg_water - 10.0) * 0.05
-                    cush_impact = (9.5 - cush) * 0.1 # クッション値の補正を計算に含める
+                    cush_impact = (9.5 - cush) * 0.1
                 else:
                     water_impact = (12.0 - avg_water) * -0.10
                     cush_impact = 0
@@ -110,18 +107,33 @@ with tab2:
     st.header("📊 馬別履歴データベース")
     df = get_db_data()
     if not df.empty:
-        search = st.text_input("馬名で検索")
-        if search:
-            df = df[df['name'].str.contains(search)]
-        
-        # --- 表示用にRTCを「分:秒.1桁」に変換して表示 (改良) ---
+        search_horse = st.text_input("馬名で検索", key="search_h")
         display_df = df.copy()
+        if search_horse:
+            display_df = display_df[display_df['name'].str.contains(search_horse)]
+        
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
-        st.dataframe(display_df.sort_values("timestamp", ascending=False), use_container_width=True)
+        st.dataframe(display_df.sort_values(["name", "timestamp"], ascending=[True, False]), use_container_width=True)
     else:
-        st.info("データがまだありません。")
+        st.info("データがありません。")
 
 with tab3:
+    st.header("🏁 レース別履歴データベース")
+    df = get_db_data()
+    if not df.empty:
+        # 登録されているレース名のリストを取得
+        race_list = sorted(df['last_race'].unique())
+        selected_race = st.selectbox("表示するレースを選択", race_list)
+        
+        if selected_race:
+            race_df = df[df['last_race'] == selected_race].copy()
+            race_df['base_rtc'] = race_df['base_rtc'].apply(format_time)
+            # RTCが良い順に並び替えて表示
+            st.dataframe(race_df.sort_values("base_rtc"), use_container_width=True)
+    else:
+        st.info("データがありません。")
+
+with tab4:
     st.header("🎯 次走シミュレーター")
     df = get_db_data()
     if not df.empty:
