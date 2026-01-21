@@ -12,7 +12,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_db_data():
     try:
-        # スプレッドシートから最新データを取得
         return conn.read(ttl="0") 
     except:
         return pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp"])
@@ -23,7 +22,7 @@ def format_time(seconds):
     s = seconds % 60
     return f"{m}:{s:04.1f}"
 
-# 競馬場データ
+# 競馬場物理データ
 COURSE_DATA = {
     "東京": 0.10, "中山": 0.25, "京都": 0.15, "阪神": 0.18, "中京": 0.20,
     "新潟": 0.05, "小倉": 0.30, "福島": 0.28, "札幌": 0.22, "函館": 0.25
@@ -39,7 +38,13 @@ with tab1:
         c_name = st.selectbox("競馬場", list(COURSE_DATA.keys()))
         t_type = st.radio("種別", ["芝", "ダート"])
         dist = st.number_input("距離 (m)", 800, 4000, 1600)
+        
+        # --- 含水率の個別設定 (ここを改良) ---
+        st.divider()
+        st.write("💧 馬場コンディション")
         cush = st.slider("クッション値", 7.0, 12.0, 9.5) if t_type == "芝" else 9.5
+        w_4c = st.slider("含水率：4角 (%)", 0.0, 30.0, 10.0)
+        w_goal = st.slider("含水率：ゴール前 (%)", 0.0, 30.0, 10.0)
         bias = st.slider("馬場補正 (秒)", -1.0, 1.0, 0.0)
 
     col1, col2 = st.columns(2)
@@ -48,7 +53,6 @@ with tab1:
 
     if st.button("🚀 解析してDBへ保存"):
         if raw_input:
-            # 簡単なパース処理
             clean_text = re.sub(r'\s+', ' ', raw_input)
             matches = list(re.finditer(r'(\d{1,2}:\d{2}\.\d)', clean_text))
             
@@ -57,18 +61,31 @@ with tab1:
                 time_str = m.group(1)
                 before = clean_text[max(0, m.start()-100):m.start()]
                 
-                # 馬名と体重の抽出
+                # --- 精密馬名抽出ロジック (外国人ジョッキー除外) ---
                 weight_m = re.search(r'(\d{2}\.\d)', before)
                 name = "不明"; weight = 56.0
                 if weight_m:
                     weight = float(weight_m.group(1))
+                    # 斤量(56.0等)の直前にあるカタカナのみを馬名として認識
                     parts = re.findall(r'([ァ-ヶー]{2,})', before[:weight_m.start()])
                     if parts: name = parts[-1]
                 
-                # RTC計算（簡易版コア）
+                # --- RTC計算ロジック (改良版含水率反映) ---
                 m_p, s_p = map(float, time_str.split(':'))
                 sec = m_p * 60 + s_p
-                rtc = sec + bias - (weight-56)*0.1 # 簡易計算
+                
+                # 物理補正
+                c_penalty = COURSE_DATA.get(c_name, 0.2)
+                stamina_f = dist / 1600.0
+                
+                # 水分影響の計算 (4角とゴール前の平均値で算出)
+                avg_water = (w_4c + w_goal) / 2
+                if t_type == "芝":
+                    water_impact = (avg_water - 10.0) * 0.05
+                else:
+                    water_impact = (12.0 - avg_water) * -0.10
+                
+                rtc = sec + bias - (weight-56)*0.1 - water_impact
                 
                 new_rows.append({
                     "name": name,
@@ -76,7 +93,7 @@ with tab1:
                     "last_race": r_name,
                     "course": c_name,
                     "dist": dist,
-                    "notes": "保存済み",
+                    "notes": f"4角{w_4c}%/G前{w_goal}%",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
                 })
             
@@ -107,9 +124,8 @@ with tab3:
             if st.button("🏁 シミュレーション実行"):
                 results = []
                 for h in selected:
-                    h_data = df[df['name'] == h].iloc[-1] # 最新データ
-                    # 競馬場ごとの補正計算
-                    sim_rtc = h_data['base_rtc'] + COURSE_DATA[target_c]
+                    h_data = df[df['name'] == h].iloc[-1]
+                    sim_rtc = h_data['base_rtc'] + (COURSE_DATA[target_c] * (h_data['dist']/1600.0))
                     results.append({"馬名": h, "想定RTC": format_time(sim_rtc), "raw": sim_rtc})
                 
                 res_df = pd.DataFrame(results).sort_values("raw")
