@@ -1,5 +1,4 @@
 import streamlit as st
-import pd as pd
 import pandas as pd
 import re
 from streamlit_gsheets import GSheetsConnection
@@ -84,11 +83,11 @@ with tab1:
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
                 
-                # 1. 斤量の抽出 (50.0~70.0の範囲)
+                # 斤量の抽出 (50.0~70.0の範囲)
                 weight_match = re.search(r'\s([5-7]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 56.0
                 
-                # 2. 上がりタイムの抽出 (斤量と一致する数値は完全に除外)
+                # 上がりタイムの抽出 (斤量と重複しない数値を採用)
                 agari_matches = re.findall(r'\s(\d{2}\.\d)\s', line)
                 indiv_l3f = l3f_val
                 for val in agari_matches:
@@ -110,14 +109,11 @@ with tab1:
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 
                 auto_comment = f"【評価】{'/'.join(eval_parts) if eval_parts else 'バイアス相応'}"
-                
-                # --- RTC計算に斤量補正を適用 ---
-                # 基準56kgから1kg重くなるごとに0.1秒、能力を高く評価(rtcを減らす)
-                weight_adj = (weight - 56.0) * 0.1
-                rtc = (indiv_time - weight_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
+                # RTC計算を元に戻す (斤量補正なし)
+                rtc = indiv_time + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
                 new_rows.append({
-                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg",
+                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": "",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": ""
                 })
@@ -200,7 +196,7 @@ with tab3:
                     conn.update(data=df); st.success("保存完了")
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
-            st.dataframe(display_race_df[["name", "notes", "base_rtc", "l3f", "result_pos", "result_pop"]])
+            st.dataframe(display_race_df[["name", "base_rtc", "l3f", "result_pos", "result_pop"]])
 
 with tab5:
     st.header("📈 トレンド")
