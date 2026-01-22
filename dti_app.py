@@ -11,7 +11,8 @@ st.set_page_config(page_title="DTI Ultimate DB", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_db_data():
-    all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo"]
+    # dateカラムを追加した全カラム定義
+    all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date"]
     try:
         df = conn.read(ttl="0")
         if df is None or df.empty:
@@ -19,6 +20,7 @@ def get_db_data():
         for col in all_cols:
             if col not in df.columns:
                 df[col] = None
+        # クッション値・含水率のトレンド解析用に数値型へ変換を試みる
         df = df.dropna(how='all')
         return df
     except:
@@ -36,12 +38,13 @@ COURSE_DATA = {
 }
 
 # --- メイン UI ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 解析・保存", "🐎 馬別履歴", "🏁 レース別履歴", "🎯 シミュレーター", "🗑 データ管理"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📝 解析・保存", "🐎 馬別履歴", "🏁 レース別履歴", "🎯 シミュレーター", "📈 馬場トレンド", "🗑 データ管理"])
 
 with tab1:
     st.header("🚀 レース解析 & 自動保存")
     with st.sidebar:
         r_name = st.text_input("レース名")
+        r_date = st.date_input("レース実施日", datetime.now()) # 日時入力機能
         c_name = st.selectbox("競馬場", list(COURSE_DATA.keys()))
         t_type = st.radio("種別", ["芝", "ダート"])
         dist_options = list(range(1000, 3700, 100))
@@ -85,14 +88,12 @@ with tab1:
             for idx, line in enumerate(lines):
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
-                
                 time_str = time_match.group(1)
                 m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
                 
                 weight_match = re.search(r'(\d{2}\.\d)', line)
-                weight = 56.0
-                name = "不明"
+                weight = 56.0; name = "不明"
                 if weight_match:
                     weight = float(weight_match.group(1))
                     parts = re.findall(r'([ァ-ヶー]{2,})', line[:weight_match.start()])
@@ -103,41 +104,51 @@ with tab1:
                 try: last_pos = float(pos_list[idx].split('-')[-1])
                 except: last_pos = 5.0
 
-                stamina_penalty = (dist - 1600) * 0.0005
-                load_tags = []
-                bonus_sec = 0.0
-                
-                # 自動評価コメント生成用パーツ
-                eval_parts = []
+                load_tags = []; bonus_sec = 0.0; eval_parts = []
                 if pace_status == "ハイペース" and last_pos <= 4:
                     load_tags.append("ペース逆行(粘)"); bonus_sec -= 0.3
                     eval_parts.append("Hペース先行耐え")
                 elif pace_status == "スローペース" and last_pos >= 10:
                     load_tags.append("ペース逆行(追)"); bonus_sec -= 0.3
                     eval_parts.append("Sペース後方から猛追")
-
                 if race_bias == "前残り" and last_pos >= 8:
                     load_tags.append("バイアス逆行(差)"); bonus_sec -= 0.2
-                    eval_parts.append("前残りバイアスを外回し")
+                    eval_parts.append("前残りバイアス外回し")
                 elif race_bias == "差し決着" and last_pos <= 4:
                     load_tags.append("バイアス逆行(粘)"); bonus_sec -= 0.2
                     eval_parts.append("差し決着を前で粘り")
                 
                 auto_comment = f"【自動評価】{'/'.join(eval_parts) if eval_parts else 'バイアス相応'}"
-                rtc = indiv_time + bonus_sec + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + stamina_penalty
+                rtc = indiv_time + bonus_sec + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name,
                     "course": c_name, "dist": dist, "notes": "/".join(load_tags),
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment
+                    "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment,
+                    "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2
                 })
             
             if new_rows:
                 existing_df = get_db_data()
                 updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success(f"✅ 全 {len(new_rows)} 頭の解析を完了しました。")
+                st.success(f"✅ 解析完了")
+
+with tab5:
+    st.header("📈 馬場トレンド解析")
+    df = get_db_data()
+    if not df.empty and 'cushion' in df.columns:
+        target_c = st.selectbox("トレンドを確認する競馬場", list(COURSE_DATA.keys()), key="trend_c")
+        trend_df = df[df['course'] == target_c].copy()
+        if not trend_df.empty:
+            trend_df = trend_df.sort_values("date")
+            st.subheader(f"📊 {target_c}競馬場の馬場推移")
+            # クッション値と含水率の推移をチャート化
+            st.line_chart(trend_df.set_index("date")[["cushion", "water"]])
+            st.info("青線: クッション値（高いほど硬い）、赤線: 平均含水率（高いほど重い）")
+        else:
+            st.info("データが不足しています。")
 
 with tab2:
     st.header("📊 馬別履歴 & 注目馬メモ")
@@ -151,13 +162,12 @@ with tab2:
         with col_s2: target_h = st.selectbox("メモを編集する馬を選択", ["未選択"] + unique_horses)
         if target_h != "未選択":
             current_memo = df[df['name'] == target_h]['memo'].iloc[-1] if not pd.isna(df[df['name'] == target_h]['memo'].iloc[-1]) else ""
-            new_memo = st.text_area(f"【{target_h}】のメモ・評価（自動生成分を含む）", value=current_memo)
+            new_memo = st.text_area(f"【{target_h}】のメモ", value=current_memo)
             if st.button("📝 メモを保存"):
                 df.loc[df['name'] == target_h, 'memo'] = new_memo
-                conn.update(data=df)
-                st.success("メモを更新しました"); st.rerun()
+                conn.update(data=df); st.success("更新完了"); st.rerun()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
-        st.dataframe(display_df.sort_values(["name", "timestamp"], ascending=[True, False]), use_container_width=True)
+        st.dataframe(display_df.sort_values(["name", "date"], ascending=[True, False]), use_container_width=True)
 
 with tab3:
     st.header("🏁 レース別履歴データベース")
@@ -180,34 +190,31 @@ with tab4:
         horse_list = sorted([str(x) for x in valid_horses if str(x).strip() != ""])
         selected = st.multiselect("出走予定馬を選択", horse_list)
         if selected:
-            target_c = st.selectbox("次走の競馬場", list(COURSE_DATA.keys()))
+            target_c = st.selectbox("次走の競馬場", list(COURSE_DATA.keys()), key="sim_c")
             if st.button("🏁 シミュレーション実行"):
                 results = []
                 for h in selected:
-                    h_history = df[df['name'] == h].sort_values("timestamp")
+                    h_history = df[df['name'] == h].sort_values("date")
                     h_latest = h_history.iloc[-1]
                     has_hard_grit = h_history['notes'].str.contains("逆行", na=False).any()
                     h_memo = h_latest['memo'] if not pd.isna(h_latest['memo']) else ""
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (h_latest['dist']/1600.0))
                     results.append({"馬名": h, "想定RTC": sim_rtc, "last_pos": h_latest['load'], "grit": has_hard_grit, "memo": h_memo})
-
+                
                 front_runners = [r for r in results if r['last_pos'] <= 3]
                 predicted_pace = "ハイペース" if len(front_runners) >= 3 else "スローペース" if len(front_runners) <= 1 else "ミドルペース"
                 st.subheader(f"🔮 展開予測: 【{predicted_pace}】")
-
                 final_list = []
                 for r in results:
-                    suitability = "普通"
+                    suitability = "普通"; expectancy_score = 2; expectancy_label = "中"; target_odds = "5.0倍以上なら"
                     if predicted_pace == "ハイペース": suitability = "✨ 展開利（差）" if r['last_pos'] >= 8 else "⚠️ 展開不利（前）"
                     elif predicted_pace == "スローペース": suitability = "✨ 展開利（前）" if r['last_pos'] <= 3 else "⚠️ 展開不利（後）"
-                    expectancy_score = 2; expectancy_label = "中"; target_odds = "5.0倍以上なら"
-                    status_note = suitability
                     if r['grit']:
-                        status_note = f"{suitability} → 🛠 割引不要" if "不利" in suitability else f"{suitability} (鉄板)"
+                        suitability = suitability + " (🛠 実績あり)"
                         expectancy_score = 3; expectancy_label = "高"; target_odds = "2.5倍以上なら"
                     elif "利" in suitability: expectancy_score = 3; expectancy_label = "高"; target_odds = "3.5倍以上なら"
                     elif "不利" in suitability: expectancy_score = 1; expectancy_label = "低"; target_odds = "12.0倍以上なら"
-                    final_list.append({"馬名": r['馬名'], "想定タイム": format_time(r['想定RTC']), "期待値": expectancy_label, "適正オッズ": target_odds, "展開適性": status_note, "メモ/評価": r['memo'], "score": expectancy_score, "raw_rtc": r['想定RTC']})
+                    final_list.append({"馬名": r['馬名'], "想定タイム": format_time(r['想定RTC']), "期待値": expectancy_label, "適正オッズ": target_odds, "展開適性": suitability, "メモ/評価": r['memo'], "score": expectancy_score, "raw_rtc": r['想定RTC']})
 
                 res_df = pd.DataFrame(final_list).sort_values(by=["score", "raw_rtc"], ascending=[False, True])
                 res_df["順位"] = range(1, len(res_df) + 1)
@@ -218,10 +225,9 @@ with tab4:
                     if row["期待値"] == "高": return "△ 連下"
                     return ""
                 res_df["推奨印"] = res_df.apply(assign_mark, axis=1)
-                st.subheader("🏆 期待値ターゲット・ランキング")
                 st.table(res_df[["順位", "推奨印", "馬名", "想定タイム", "期待値", "適正オッズ", "展開適性", "メモ/評価"]])
 
-with tab5:
+with tab6:
     st.header("🗑 データの管理・削除")
     df = get_db_data()
     if not df.empty:
@@ -232,16 +238,9 @@ with tab5:
             r_list = sorted([str(x) for x in valid_races if str(x).strip() != ""])
             if r_list:
                 target_r = st.selectbox("削除対象レース", r_list)
-                confirm_single = st.checkbox("このレースを削除してよろしいですか？", key="single")
-                if st.button("🚨 選択したレースを削除", disabled=not confirm_single):
-                    updated_df = df[df['last_race'] != target_r]
-                    conn.update(data=updated_df)
-                    st.success(f"{target_r} を削除しました"); st.rerun()
+                if st.button("🚨 選択したレースを削除", disabled=not st.checkbox("削除確認(単)", key="c1")):
+                    conn.update(data=df[df['last_race'] != target_r]); st.rerun()
         with col_del2:
             st.subheader("⚠️ データベースの初期化")
-            st.warning("この操作を実行すると、すべての保存データ（メモ含む）が消去されます。")
-            confirm_all = st.checkbox("【重要】すべてのデータを削除することに同意します", key="all")
-            if st.button("💣 全データを一括削除", disabled=not confirm_all):
-                empty_df = pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo"])
-                conn.update(data=empty_df)
-                st.success("データベースを初期化しました"); st.rerun()
+            if st.button("💣 全削除", disabled=not st.checkbox("削除確認(全)", key="c2")):
+                conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date"])); st.rerun()
