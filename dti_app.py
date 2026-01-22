@@ -49,8 +49,9 @@ with tab1:
         st.divider()
         st.write("💧 馬場・バイアス")
         cush = st.number_input("クッション値", 7.0, 12.0, 9.5, step=0.1) if t_type == "芝" else 9.5
-        w_4c = st.slider("含水率：4角 (%)", 0.0, 30.0, 10.0)
-        w_goal = st.slider("含水率：ゴール前 (%)", 0.0, 30.0, 10.0)
+        # 含水率を入力形式に変更
+        w_4c = st.number_input("含水率：4角 (%)", 0.0, 50.0, 10.0, step=0.1)
+        w_goal = st.number_input("含水率：ゴール前 (%)", 0.0, 50.0, 10.0, step=0.1)
         bias_val = st.slider("馬場バイアス (内有利 -1.0 ↔ 外有利 +1.0)", -1.0, 1.0, 0.0)
 
     col1, col2 = st.columns(2)
@@ -71,12 +72,10 @@ with tab1:
 
     if st.button("🚀 解析してDBへ保存"):
         if raw_input and f3f_val > 0:
-            # 行単位で分割してループ処理することで重複を防ぎ、最下位まで確実に拾う
             lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 20]
             agari_list = re.findall(r'\s(\d{2}\.\d)\s', raw_input)
             pos_list = re.findall(r'\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}', raw_input)
             
-            # バイアス判定用の上位通過順
             top3_pos = []
             for i in range(min(3, len(pos_list))):
                 top3_pos.append(float(pos_list[i].split('-')[-1]))
@@ -92,7 +91,6 @@ with tab1:
                 m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
                 
-                # 馬名と馬体重の抽出
                 weight_match = re.search(r'(\d{2}\.\d)', line)
                 weight = 56.0
                 name = "不明"
