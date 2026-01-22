@@ -49,7 +49,6 @@ with tab1:
         st.divider()
         st.write("💧 馬場・バイアス")
         cush = st.number_input("クッション値", 7.0, 12.0, 9.5, step=0.1) if t_type == "芝" else 9.5
-        # 含水率を入力形式に変更
         w_4c = st.number_input("含水率：4角 (%)", 0.0, 50.0, 10.0, step=0.1)
         w_goal = st.number_input("含水率：ゴール前 (%)", 0.0, 50.0, 10.0, step=0.1)
         bias_val = st.slider("馬場バイアス (内有利 -1.0 ↔ 外有利 +1.0)", -1.0, 1.0, 0.0)
@@ -108,25 +107,30 @@ with tab1:
                 load_tags = []
                 bonus_sec = 0.0
                 
+                # 自動評価コメント生成用パーツ
+                eval_parts = []
                 if pace_status == "ハイペース" and last_pos <= 4:
                     load_tags.append("ペース逆行(粘)"); bonus_sec -= 0.3
+                    eval_parts.append("Hペース先行耐え")
                 elif pace_status == "スローペース" and last_pos >= 10:
                     load_tags.append("ペース逆行(追)"); bonus_sec -= 0.3
+                    eval_parts.append("Sペース後方から猛追")
 
                 if race_bias == "前残り" and last_pos >= 8:
                     load_tags.append("バイアス逆行(差)"); bonus_sec -= 0.2
+                    eval_parts.append("前残りバイアスを外回し")
                 elif race_bias == "差し決着" and last_pos <= 4:
                     load_tags.append("バイアス逆行(粘)"); bonus_sec -= 0.2
-                else:
-                    load_tags.append("バイアス相応")
-
+                    eval_parts.append("差し決着を前で粘り")
+                
+                auto_comment = f"【自動評価】{'/'.join(eval_parts) if eval_parts else 'バイアス相応'}"
                 rtc = indiv_time + bonus_sec + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + stamina_penalty
                 
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name,
                     "course": c_name, "dist": dist, "notes": "/".join(load_tags),
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": ""
+                    "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment
                 })
             
             if new_rows:
@@ -140,17 +144,14 @@ with tab2:
     df = get_db_data()
     if not df.empty:
         col_s1, col_s2 = st.columns([1, 1])
-        with col_s1:
-            search_h = st.text_input("馬名で検索", key="search_h")
+        with col_s1: search_h = st.text_input("馬名で検索", key="search_h")
         display_df = df.copy()
-        if search_h:
-            display_df = display_df[display_df['name'].str.contains(search_h, na=False)]
+        if search_h: display_df = display_df[display_df['name'].str.contains(search_h, na=False)]
         unique_horses = sorted(df['name'].dropna().unique())
-        with col_s2:
-            target_h = st.selectbox("メモを編集する馬を選択", ["未選択"] + unique_horses)
+        with col_s2: target_h = st.selectbox("メモを編集する馬を選択", ["未選択"] + unique_horses)
         if target_h != "未選択":
             current_memo = df[df['name'] == target_h]['memo'].iloc[-1] if not pd.isna(df[df['name'] == target_h]['memo'].iloc[-1]) else ""
-            new_memo = st.text_area(f"【{target_h}】の注目馬メモ", value=current_memo)
+            new_memo = st.text_area(f"【{target_h}】のメモ・評価（自動生成分を含む）", value=current_memo)
             if st.button("📝 メモを保存"):
                 df.loc[df['name'] == target_h, 'memo'] = new_memo
                 conn.update(data=df)
@@ -172,7 +173,7 @@ with tab3:
                 st.dataframe(race_df.sort_values("base_rtc"), use_container_width=True)
 
 with tab4:
-    st.header("🎯 次走シミュレーター & 推奨印")
+    st.header("🎯 次走シミュレーター & 狙い目オッズ")
     df = get_db_data()
     if not df.empty:
         valid_horses = df['name'].dropna().unique()
@@ -199,14 +200,14 @@ with tab4:
                     suitability = "普通"
                     if predicted_pace == "ハイペース": suitability = "✨ 展開利（差）" if r['last_pos'] >= 8 else "⚠️ 展開不利（前）"
                     elif predicted_pace == "スローペース": suitability = "✨ 展開利（前）" if r['last_pos'] <= 3 else "⚠️ 展開不利（後）"
-                    expectancy_score = 2; expectancy_label = "中"
+                    expectancy_score = 2; expectancy_label = "中"; target_odds = "5.0倍以上なら"
                     status_note = suitability
                     if r['grit']:
-                        status_note = f"{suitability} → 🛠 実績により割引不要" if "不利" in suitability else f"{suitability} (鉄板)"
-                        expectancy_score = 3; expectancy_label = "高"
-                    elif "利" in suitability: expectancy_score = 3; expectancy_label = "高"
-                    elif "不利" in suitability: expectancy_score = 1; expectancy_label = "低"
-                    final_list.append({"馬名": r['馬名'], "想定タイム": format_time(r['想定RTC']), "期待値": expectancy_label, "展開適性": status_note, "注目メモ": r['memo'], "score": expectancy_score, "raw_rtc": r['想定RTC']})
+                        status_note = f"{suitability} → 🛠 割引不要" if "不利" in suitability else f"{suitability} (鉄板)"
+                        expectancy_score = 3; expectancy_label = "高"; target_odds = "2.5倍以上なら"
+                    elif "利" in suitability: expectancy_score = 3; expectancy_label = "高"; target_odds = "3.5倍以上なら"
+                    elif "不利" in suitability: expectancy_score = 1; expectancy_label = "低"; target_odds = "12.0倍以上なら"
+                    final_list.append({"馬名": r['馬名'], "想定タイム": format_time(r['想定RTC']), "期待値": expectancy_label, "適正オッズ": target_odds, "展開適性": status_note, "メモ/評価": r['memo'], "score": expectancy_score, "raw_rtc": r['想定RTC']})
 
                 res_df = pd.DataFrame(final_list).sort_values(by=["score", "raw_rtc"], ascending=[False, True])
                 res_df["順位"] = range(1, len(res_df) + 1)
@@ -218,7 +219,7 @@ with tab4:
                     return ""
                 res_df["推奨印"] = res_df.apply(assign_mark, axis=1)
                 st.subheader("🏆 期待値ターゲット・ランキング")
-                st.table(res_df[["順位", "推奨印", "馬名", "想定タイム", "期待値", "展開適性", "注目メモ"]])
+                st.table(res_df[["順位", "推奨印", "馬名", "想定タイム", "期待値", "適正オッズ", "展開適性", "メモ/評価"]])
 
 with tab5:
     st.header("🗑 データの管理・削除")
