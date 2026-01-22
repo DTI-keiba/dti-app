@@ -71,11 +71,12 @@ with tab1:
 
     if st.button("🚀 解析してDBへ保存"):
         if raw_input and f3f_val > 0:
-            clean_text = re.sub(r'\s+', ' ', raw_input)
-            matches = list(re.finditer(r'(\d{1,2}:\d{2}\.\d)', clean_text))
-            agari_list = re.findall(r'\s(\d{2}\.\d)\s', clean_text)
-            pos_list = re.findall(r'\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}', clean_text)
+            # 行単位で分割してループ処理することで重複を防ぎ、最下位まで確実に拾う
+            lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 20]
+            agari_list = re.findall(r'\s(\d{2}\.\d)\s', raw_input)
+            pos_list = re.findall(r'\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}', raw_input)
             
+            # バイアス判定用の上位通過順
             top3_pos = []
             for i in range(min(3, len(pos_list))):
                 top3_pos.append(float(pos_list[i].split('-')[-1]))
@@ -83,29 +84,49 @@ with tab1:
             race_bias = "前残り" if avg_top_pos <= 4.0 else "差し決着" if avg_top_pos >= 8.0 else "フラット"
 
             new_rows = []
-            for idx, m in enumerate(matches):
-                time_str = m.group(1)
-                before = clean_text[max(0, m.start()-100):m.start()]
-                weight_m = re.search(r'(\d{2}\.\d)', before)
-                name = "不明"; weight = 56.0
-                if weight_m:
-                    weight = float(weight_m.group(1))
-                    parts = re.findall(r'([ァ-ヶー]{2,})', before[:weight_m.start()])
-                    if parts: name = parts[-1]
+            for idx, line in enumerate(lines):
+                time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
+                if not time_match: continue
                 
+                time_str = time_match.group(1)
                 m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
+                
+                # 馬名と馬体重の抽出
+                weight_match = re.search(r'(\d{2}\.\d)', line)
+                weight = 56.0
+                name = "不明"
+                if weight_match:
+                    weight = float(weight_match.group(1))
+                    parts = re.findall(r'([ァ-ヶー]{2,})', line[:weight_match.start()])
+                    if parts: name = parts[-1]
                 
                 try: indiv_l3f = float(agari_list[idx])
                 except: indiv_l3f = l3f_val
                 try: last_pos = float(pos_list[idx].split('-')[-1])
                 except: last_pos = 5.0
 
-                rtc = indiv_time + (dist - 1600) * 0.0005 + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1
+                stamina_penalty = (dist - 1600) * 0.0005
+                load_tags = []
+                bonus_sec = 0.0
+                
+                if pace_status == "ハイペース" and last_pos <= 4:
+                    load_tags.append("ペース逆行(粘)"); bonus_sec -= 0.3
+                elif pace_status == "スローペース" and last_pos >= 10:
+                    load_tags.append("ペース逆行(追)"); bonus_sec -= 0.3
+
+                if race_bias == "前残り" and last_pos >= 8:
+                    load_tags.append("バイアス逆行(差)"); bonus_sec -= 0.2
+                elif race_bias == "差し決着" and last_pos <= 4:
+                    load_tags.append("バイアス逆行(粘)"); bonus_sec -= 0.2
+                else:
+                    load_tags.append("バイアス相応")
+
+                rtc = indiv_time + bonus_sec + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + stamina_penalty
                 
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name,
-                    "course": c_name, "dist": dist, "notes": "/".join([]),
+                    "course": c_name, "dist": dist, "notes": "/".join(load_tags),
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": ""
                 })
@@ -114,7 +135,7 @@ with tab1:
                 existing_df = get_db_data()
                 updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success(f"✅ 解析完了")
+                st.success(f"✅ 全 {len(new_rows)} 頭の解析を完了しました。")
 
 with tab2:
     st.header("📊 馬別履歴 & 注目馬メモ")
@@ -206,7 +227,6 @@ with tab5:
     df = get_db_data()
     if not df.empty:
         col_del1, col_del2 = st.columns(2)
-        
         with col_del1:
             st.subheader("📍 レース単位の削除")
             valid_races = df['last_race'].dropna().unique()
@@ -218,13 +238,11 @@ with tab5:
                     updated_df = df[df['last_race'] != target_r]
                     conn.update(data=updated_df)
                     st.success(f"{target_r} を削除しました"); st.rerun()
-
         with col_del2:
             st.subheader("⚠️ データベースの初期化")
             st.warning("この操作を実行すると、すべての保存データ（メモ含む）が消去されます。")
             confirm_all = st.checkbox("【重要】すべてのデータを削除することに同意します", key="all")
             if st.button("💣 全データを一括削除", disabled=not confirm_all):
-                # カラム定義だけ残した空のDataFrameを作成
                 empty_df = pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo"])
                 conn.update(data=empty_df)
                 st.success("データベースを初期化しました"); st.rerun()
