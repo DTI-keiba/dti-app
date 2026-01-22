@@ -20,6 +20,9 @@ def get_db_data():
             if col not in df.columns:
                 df[col] = None
         df['date'] = pd.to_datetime(df['date'])
+        # 読み込み時に数値カラムを安全に変換
+        df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
+        df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
         df = df.dropna(how='all')
         return df
     except:
@@ -29,6 +32,7 @@ def format_time(seconds):
     if seconds is None or seconds <= 0: return ""
     m = int(seconds // 60)
     s = seconds % 60
+    # タイム表示を「分:秒.ソ」の形式に整形
     return f"{m}:{s:04.1f}"
 
 COURSE_DATA = {
@@ -125,13 +129,17 @@ with tab2:
             current_flag = df.at[h_idx, 'next_buy_flag'] if not pd.isna(df.at[h_idx, 'next_buy_flag']) else ""
             with st.form("edit_horse_form"):
                 st.write(f"🐎 {target_h} の個別設定")
-                new_memo = st.text_area("メモ・評価（直線不利など映像的な内容）", value=current_memo)
+                new_memo = st.text_area("メモ・評価", value=current_memo)
                 new_flag = st.text_input("次走への個別の「買い」条件", value=current_flag)
                 if st.form_submit_button("設定を保存"):
                     df.at[h_idx, 'memo'] = new_memo
                     df.at[h_idx, 'next_buy_flag'] = new_flag
                     conn.update(data=df); st.success(f"{target_h} 更新完了"); st.rerun()
+        
+        # 表示用の加工
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
+        display_df = display_df.copy()
+        display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
         st.dataframe(display_df.sort_values("date", ascending=False), use_container_width=True)
 
 with tab4:
@@ -154,12 +162,10 @@ with tab4:
                     h_latest = h_history.iloc[-1]
                     best_past = h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]
                     
-                    # 条件合致スコア
                     b_match = 1 if abs(best_past['cushion'] - current_cush) <= 0.5 else 0
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     
-                    # 次走距離に基づくシミュレーション
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
                     total_score = b_match + rota_score + (1 if h_latest['next_buy_flag'] else 0)
                     grade = "S" if total_score >= 2 else "A" if total_score == 1 else "B"
@@ -180,11 +186,21 @@ with tab3:
             with st.form("result_form"):
                 for i, row in race_df.iterrows():
                     col_r1, col_r2 = st.columns(2)
-                    with col_r1: race_df.at[i, 'result_pos'] = st.number_input(f"{row['name']} 着順", 0, 18, value=int(row['result_pos']) if row['result_pos'] else 0, key=f"pos_{i}")
-                    with col_r2: race_df.at[i, 'result_pop'] = st.number_input(f"{row['name']} 人気", 0, 18, value=int(row['result_pop']) if row['result_pop'] else 0, key=f"pop_{i}")
+                    val_pos = int(row['result_pos']) if not pd.isna(row['result_pos']) else 0
+                    val_pop = int(row['result_pop']) if not pd.isna(row['result_pop']) else 0
+                    
+                    with col_r1: race_df.at[i, 'result_pos'] = st.number_input(f"{row['name']} 着順", 0, 18, value=val_pos, key=f"pos_{i}")
+                    with col_r2: race_df.at[i, 'result_pop'] = st.number_input(f"{row['name']} 人気", 0, 18, value=val_pop, key=f"pop_{i}")
                 if st.form_submit_button("結果を保存"):
-                    df.update(race_df); conn.update(data=df); st.success("保存完了")
-            st.dataframe(race_df[["name", "base_rtc", "result_pos", "result_pop"]])
+                    for i, row in race_df.iterrows():
+                        df.at[i, 'result_pos'] = row['result_pos']
+                        df.at[i, 'result_pop'] = row['result_pop']
+                    conn.update(data=df); st.success("保存完了")
+            
+            # 走破タイムを表示形式に変換して表示
+            display_race_df = race_df.copy()
+            display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
+            st.dataframe(display_race_df[["name", "base_rtc", "result_pos", "result_pop"]])
 
 with tab5:
     st.header("📈 トレンド")
