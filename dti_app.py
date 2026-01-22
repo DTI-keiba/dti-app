@@ -76,50 +76,80 @@ with tab1:
     if st.button("🚀 解析してDBへ保存"):
         if raw_input and f3f_val > 0:
             lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 20]
-            new_rows = []
-            for idx, line in enumerate(lines):
+            
+            # 1次解析（馬場傾向把握用）
+            parsed_data = []
+            for line in lines:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
+                
+                # 着順
+                res_pos_match = re.match(r'^(\d{1,2})', line)
+                res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
+                
+                # 4角順位
+                pos_match = re.search(r'\d{1,2}-\d{1,2}-\d{1,2}-(\d{1,2})', line)
+                four_c_pos = float(pos_match.group(1)) if pos_match else 5.0
+                parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
+
+            # 上位馬の傾向分析
+            top_3_pos = [d["four_c_pos"] for d in parsed_data if d["res_pos"] <= 3]
+            avg_top_pos = sum(top_3_pos) / len(top_3_pos) if top_3_pos else 7.0
+            bias_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
+
+            new_rows = []
+            for entry in parsed_data:
+                line = entry["line"]; last_pos = entry["four_c_pos"]; result_pos = entry["res_pos"]
+                time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
                 
-                # 斤量の抽出 (50.0~70.0の範囲)
                 weight_match = re.search(r'\s([5-7]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 56.0
                 
-                # 上がりタイムの抽出 (斤量と重複しない数値を採用)
-                agari_matches = re.findall(r'\s(\d{2}\.\d)\s', line)
+                all_decimal_values = re.findall(r'\s(\d{2}\.\d)\s', line)
                 indiv_l3f = l3f_val
-                for val in agari_matches:
-                    f_val = float(val)
-                    if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.01:
+                for val_str in all_decimal_values:
+                    f_val = float(val_str)
+                    if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.1:
                         indiv_l3f = f_val
                         break
                 
                 name = "不明"
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
-                
-                pos_match = re.search(r'\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}', line)
-                last_pos = float(pos_match.group().split('-')[-1]) if pos_match else 5.0
 
                 eval_parts = []
+                # 展開逆行評価
+                if pace_status == "ハイペース" and last_pos <= 3.0:
+                    eval_parts.append("🔥 展開逆行:粘り込み")
+                elif pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - indiv_l3f) > 1.5:
+                    eval_parts.append("🔥 展開逆行:猛追")
+                
+                # バイアス逆行評価（5着以内馬が対象）
+                if result_pos <= 5:
+                    if bias_type == "前有利" and last_pos >= 10.0:
+                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行:後方強襲")
+                    elif bias_type == "後有利" and last_pos <= 3.0:
+                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行:先行粘り")
+                
                 l3f_diff = f3f_val - indiv_l3f
                 if l3f_diff > 2.0: eval_parts.append("🚀 アガリ優秀")
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 
-                auto_comment = f"【評価】{'/'.join(eval_parts) if eval_parts else 'バイアス相応'}"
-                # RTC計算を元に戻す (斤量補正なし)
-                rtc = indiv_time + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
+                auto_comment = f"【{pace_status}/{bias_type}】{'/'.join(eval_parts) if eval_parts else '順境'}"
+                
+                weight_adj = (weight - 56.0) * 0.1
+                rtc = (indiv_time - weight_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
                 new_rows.append({
-                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": "",
+                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment,
-                    "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": ""
+                    "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "", "result_pos": result_pos
                 })
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
-                conn.update(data=updated_df); st.success(f"✅ 解析完了")
+                conn.update(data=updated_df); st.success(f"✅ 解析完了 (傾向: {bias_type})")
 
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
@@ -196,7 +226,7 @@ with tab3:
                     conn.update(data=df); st.success("保存完了")
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
-            st.dataframe(display_race_df[["name", "base_rtc", "l3f", "result_pos", "result_pop"]])
+            st.dataframe(display_race_df[["name", "notes", "base_rtc", "l3f", "result_pos", "result_pop"]])
 
 with tab5:
     st.header("📈 トレンド")
