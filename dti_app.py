@@ -79,22 +79,20 @@ with tab1:
             
             new_rows = []
             for idx, line in enumerate(lines):
-                # 走破タイムの抽出
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
                 
-                # 斤量の抽出 (50.0~70.0の範囲で限定)
+                # 斤量の抽出 (50.0~70.0の範囲)
                 weight_match = re.search(r'\s([5-7]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 56.0
                 
-                # 上がりタイムの抽出 (JRA形式では斤量よりも後ろに位置する30~45秒程度の数値)
+                # 上がりタイムの抽出
                 agari_matches = re.findall(r'\s(\d{2}\.\d)\s', line)
                 indiv_l3f = l3f_val
                 for val in agari_matches:
                     f_val = float(val)
-                    # 斤量と重複せず、かつ上がりタイムらしい範囲(30-46秒)を抽出
                     if 30.0 <= f_val <= 46.0 and f_val != weight:
                         indiv_l3f = f_val
                         break
@@ -104,20 +102,24 @@ with tab1:
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
                 
-                # 通過順の抽出
+                # 通過順
                 pos_match = re.search(r'\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}', line)
                 last_pos = float(pos_match.group().split('-')[-1]) if pos_match else 5.0
 
-                load_tags = []; eval_parts = []
+                eval_parts = []
                 l3f_diff = f3f_val - indiv_l3f
                 if l3f_diff > 2.0: eval_parts.append("🚀 アガリ優秀")
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 
                 auto_comment = f"【評価】{'/'.join(eval_parts) if eval_parts else 'バイアス相応'}"
-                rtc = indiv_time + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
+                
+                # --- RTC計算に斤量補正を追加 ---
+                # 1kg = 0.1秒の計算。56kgより重ければrtcを減らし(評価を上げ)、軽ければrtcを増やす(評価を下げる)
+                weight_penalty = (weight - 56.0) * 0.1
+                rtc = indiv_time - weight_penalty + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
                 new_rows.append({
-                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": "",
+                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"斤量:{weight}kg",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": ""
                 })
