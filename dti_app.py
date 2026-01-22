@@ -20,7 +20,6 @@ def get_db_data():
             if col not in df.columns:
                 df[col] = None
         df['date'] = pd.to_datetime(df['date'])
-        # 読み込み時に数値カラムを安全に変換
         df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
         df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
         df = df.dropna(how='all')
@@ -32,7 +31,6 @@ def format_time(seconds):
     if seconds is None or seconds <= 0: return ""
     m = int(seconds // 60)
     s = seconds % 60
-    # タイム表示を「分:秒.ソ」の形式に整形
     return f"{m}:{s:04.1f}"
 
 COURSE_DATA = {
@@ -78,36 +76,48 @@ with tab1:
     if st.button("🚀 解析してDBへ保存"):
         if raw_input and f3f_val > 0:
             lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 20]
-            agari_list = re.findall(r'\s(\d{2}\.\d)\s', raw_input)
-            pos_list = re.findall(r'\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}', raw_input)
             
             new_rows = []
             for idx, line in enumerate(lines):
+                # 走破タイムの抽出
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
-                weight_match = re.search(r'(\d{2}\.\d)', line); weight = 56.0; name = "不明"
-                if weight_match:
-                    weight = float(weight_match.group(1))
-                    parts = re.findall(r'([ァ-ヶー]{2,})', line[:weight_match.start()])
-                    if parts: name = parts[-1]
                 
-                try: indiv_l3f = float(agari_list[idx])
-                except: indiv_l3f = l3f_val
-                try: last_pos = float(pos_list[idx].split('-')[-1])
-                except: last_pos = 5.0
+                # 斤量の抽出 (50.0~70.0の範囲で限定)
+                weight_match = re.search(r'\s([5-7]\d\.\d)\s', line)
+                weight = float(weight_match.group(1)) if weight_match else 56.0
+                
+                # 上がりタイムの抽出 (JRA形式では斤量よりも後ろに位置する30~45秒程度の数値)
+                agari_matches = re.findall(r'\s(\d{2}\.\d)\s', line)
+                indiv_l3f = l3f_val
+                for val in agari_matches:
+                    f_val = float(val)
+                    # 斤量と重複せず、かつ上がりタイムらしい範囲(30-46秒)を抽出
+                    if 30.0 <= f_val <= 46.0 and f_val != weight:
+                        indiv_l3f = f_val
+                        break
+                
+                # 馬名の抽出
+                name = "不明"
+                parts = re.findall(r'([ァ-ヶー]{2,})', line)
+                if parts: name = parts[0]
+                
+                # 通過順の抽出
+                pos_match = re.search(r'\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}', line)
+                last_pos = float(pos_match.group().split('-')[-1]) if pos_match else 5.0
 
-                load_tags = []; bonus_sec = 0.0; eval_parts = []
+                load_tags = []; eval_parts = []
                 l3f_diff = f3f_val - indiv_l3f
                 if l3f_diff > 2.0: eval_parts.append("🚀 アガリ優秀")
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 
                 auto_comment = f"【評価】{'/'.join(eval_parts) if eval_parts else 'バイアス相応'}"
-                rtc = indiv_time + bonus_sec + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
+                rtc = indiv_time + bias_val - (weight-56)*0.1 - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
                 new_rows.append({
-                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": "/".join(load_tags),
+                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": "",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": ""
                 })
@@ -135,8 +145,6 @@ with tab2:
                     df.at[h_idx, 'memo'] = new_memo
                     df.at[h_idx, 'next_buy_flag'] = new_flag
                     conn.update(data=df); st.success(f"{target_h} 更新完了"); st.rerun()
-        
-        # 表示用の加工
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
         display_df = display_df.copy()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
@@ -154,24 +162,19 @@ with tab4:
                 target_dist = st.selectbox("次走の距離 (m)", list(range(1000, 3700, 100)), index=6, key="sim_dist")
             with col_cfg2:
                 current_cush = st.slider("想定クッション値", 7.0, 12.0, 9.5)
-            
             if st.button("🏁 統合スコア算出"):
                 results = []
                 for h in selected:
                     h_history = df[df['name'] == h].sort_values("date")
                     h_latest = h_history.iloc[-1]
                     best_past = h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]
-                    
                     b_match = 1 if abs(best_past['cushion'] - current_cush) <= 0.5 else 0
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
-                    
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
                     total_score = b_match + rota_score + (1 if h_latest['next_buy_flag'] else 0)
                     grade = "S" if total_score >= 2 else "A" if total_score == 1 else "B"
-                    
                     results.append({"評価": grade, "馬名": h, "想定タイム": format_time(sim_rtc), "馬場": "🔥" if b_match else "-", "手動メモ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc})
-                
                 res_df = pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])
                 st.table(res_df[["評価", "馬名", "想定タイム", "馬場", "手動メモ"]])
 
@@ -188,7 +191,6 @@ with tab3:
                     col_r1, col_r2 = st.columns(2)
                     val_pos = int(row['result_pos']) if not pd.isna(row['result_pos']) else 0
                     val_pop = int(row['result_pop']) if not pd.isna(row['result_pop']) else 0
-                    
                     with col_r1: race_df.at[i, 'result_pos'] = st.number_input(f"{row['name']} 着順", 0, 18, value=val_pos, key=f"pos_{i}")
                     with col_r2: race_df.at[i, 'result_pop'] = st.number_input(f"{row['name']} 人気", 0, 18, value=val_pop, key=f"pop_{i}")
                 if st.form_submit_button("結果を保存"):
@@ -196,8 +198,6 @@ with tab3:
                         df.at[i, 'result_pos'] = row['result_pos']
                         df.at[i, 'result_pop'] = row['result_pop']
                     conn.update(data=df); st.success("保存完了")
-            
-            # 走破タイムを表示形式に変換して表示
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
             st.dataframe(display_race_df[["name", "base_rtc", "result_pos", "result_pop"]])
