@@ -192,10 +192,7 @@ with tab4:
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
                     total_score = b_match + rota_score + (1 if h_latest['next_buy_flag'] else 0)
                     grade = "S" if total_score >= 2 else "A" if total_score == 1 else "B"
-                    
-                    # 履歴から解析メモを取得して表示に加える
                     auto_memo = h_latest['memo'] if not pd.isna(h_latest['memo']) else ""
-                    
                     results.append({
                         "評価": grade, "馬名": h, "想定タイム": format_time(sim_rtc), 
                         "馬場": "🔥" if b_match else "-", "解析メモ": auto_memo, 
@@ -237,8 +234,20 @@ with tab5:
         if not trend_df.empty: st.line_chart(trend_df.set_index("date")[["cushion", "water"]])
 
 with tab6:
-    st.header("🗑 管理")
+    st.header("🗑 データベース管理")
     df = get_db_data()
     if not df.empty:
-        if st.button("💣 全削除", disabled=not st.checkbox("消去実行")):
-            conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"])); st.rerun()
+        # 現在のデータベースの中身を表示
+        st.write("📁 現在保存されているデータ (最新順)")
+        view_df = df.copy()
+        view_df['base_rtc'] = view_df['base_rtc'].apply(format_time)
+        st.dataframe(view_df.sort_values("date", ascending=False), use_container_width=True)
+        
+        st.divider()
+        st.warning("⚠️ データの消去を行う場合は以下にチェックを入れてください。")
+        if st.button("💣 全削除を実行する", disabled=not st.checkbox("消去を許可")):
+            conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
+            st.success("全てのデータを削除しました。")
+            st.rerun()
+    else:
+        st.info("現在、データベースに保存されているデータはありません。")
