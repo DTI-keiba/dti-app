@@ -77,22 +77,16 @@ with tab1:
         if raw_input and f3f_val > 0:
             lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 20]
             
-            # 1次解析（馬場傾向把握用）
             parsed_data = []
             for line in lines:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
-                
-                # 着順
                 res_pos_match = re.match(r'^(\d{1,2})', line)
                 res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
-                
-                # 4角順位
                 pos_match = re.search(r'\d{1,2}-\d{1,2}-\d{1,2}-(\d{1,2})', line)
                 four_c_pos = float(pos_match.group(1)) if pos_match else 5.0
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
 
-            # 上位馬の傾向分析
             top_3_pos = [d["four_c_pos"] for d in parsed_data if d["res_pos"] <= 3]
             avg_top_pos = sum(top_3_pos) / len(top_3_pos) if top_3_pos else 7.0
             bias_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
@@ -120,13 +114,11 @@ with tab1:
                 if parts: name = parts[0]
 
                 eval_parts = []
-                # 展開逆行評価
                 if pace_status == "ハイペース" and last_pos <= 3.0:
                     eval_parts.append("🔥 展開逆行:粘り込み")
                 elif pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - indiv_l3f) > 1.5:
                     eval_parts.append("🔥 展開逆行:猛追")
                 
-                # バイアス逆行評価（5着以内馬が対象）
                 if result_pos <= 5:
                     if bias_type == "前有利" and last_pos >= 10.0:
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行:後方強襲")
@@ -200,9 +192,17 @@ with tab4:
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
                     total_score = b_match + rota_score + (1 if h_latest['next_buy_flag'] else 0)
                     grade = "S" if total_score >= 2 else "A" if total_score == 1 else "B"
-                    results.append({"評価": grade, "馬名": h, "想定タイム": format_time(sim_rtc), "馬場": "🔥" if b_match else "-", "手動メモ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc})
+                    
+                    # 履歴から解析メモを取得して表示に加える
+                    auto_memo = h_latest['memo'] if not pd.isna(h_latest['memo']) else ""
+                    
+                    results.append({
+                        "評価": grade, "馬名": h, "想定タイム": format_time(sim_rtc), 
+                        "馬場": "🔥" if b_match else "-", "解析メモ": auto_memo, 
+                        "買い条件": h_latest['next_buy_flag'], "raw_rtc": sim_rtc
+                    })
                 res_df = pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])
-                st.table(res_df[["評価", "馬名", "想定タイム", "馬場", "手動メモ"]])
+                st.table(res_df[["評価", "馬名", "想定タイム", "馬場", "解析メモ", "買い条件"]])
 
 with tab3:
     st.header("🏁 答え合わせ & レース別履歴")
