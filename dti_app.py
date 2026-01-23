@@ -99,12 +99,17 @@ with tab1:
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
                 
-                weight_match = re.search(r'\s([5-7]\d\.\d)\s', line)
-                weight = float(weight_match.group(1)) if weight_match else 56.0
+                # --- 上がり3F抽出の徹底改善 ---
+                weight_match = re.search(r'\s([4-6]\d\.\d)\s', line)
+                weight = float(weight_match.group(1)) if weight_match else 0.0
                 
-                all_decimal_values = re.findall(r'\s(\d{2}\.\d)\s', line)
+                # 小数点第一位を持つ全ての数値を抽出（斤量や上がりタイム等）
+                all_decimals = re.findall(r'(\d{2}\.\d)', line)
                 indiv_l3f = l3f_val
-                for val_str in all_decimal_values:
+                
+                # 30.0〜46.0の範囲にあり、かつ斤量(weight)と一致しないものを上がり3Fとする
+                # 逆順(後ろから)探すことで、より上がりタイム列の可能性を高める
+                for val_str in reversed(all_decimals):
                     f_val = float(val_str)
                     if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.1:
                         indiv_l3f = f_val
@@ -114,7 +119,6 @@ with tab1:
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
 
-                # 負荷算出
                 load_score = 0.0
                 if pace_status == "ハイペース":
                     load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
@@ -122,10 +126,7 @@ with tab1:
                     load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
                 
                 eval_parts = []
-                # 逆行判定（バイアス ＋ 展開）
                 is_counter_target = False
-                
-                # バイアス逆行
                 if result_pos <= 5:
                     if bias_type == "前有利" and last_pos >= 10.0:
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行")
@@ -134,7 +135,6 @@ with tab1:
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行")
                         is_counter_target = True
                 
-                # 展開（ペース）逆行
                 if pace_status == "ハイペース" and last_pos <= 3.0:
                     eval_parts.append("🔥 展開逆行")
                     is_counter_target = True
@@ -207,15 +207,9 @@ with tab4:
                     b_match = 1 if abs(best_past['cushion'] - current_cush) <= 0.5 else 0
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
-                    
-                    # 【重要】逆行ボーナスの合算（バイアス逆行 or 展開逆行）
-                    counter_score = 0
-                    if "逆行" in str(h_latest['memo']):
-                        counter_score = 1
-                    
+                    counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
                     total_score = b_match + rota_score + counter_score + (1 if h_latest['next_buy_flag'] and "★" not in h_latest['next_buy_flag'] else 0)
-                    
                     grade = "S" if total_score >= 2 else "A" if total_score == 1 else "B"
                     results.append({
                         "評価": grade, "馬名": h, "想定タイム": format_time(sim_rtc), 
