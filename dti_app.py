@@ -61,6 +61,7 @@ with tab1:
     with col1: 
         lap_input = st.text_area("JRAレースラップ (例: 12.5-11.0-12.0...)")
         f3f_val = 0.0; l3f_val = 0.0; pace_status = "ミドルペース"
+        pace_diff = 0.0
         if lap_input:
             laps = [float(x) for x in re.findall(r'\d+\.\d', lap_input)]
             if len(laps) >= 3:
@@ -113,23 +114,40 @@ with tab1:
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
 
-                eval_parts = []
-                if pace_status == "ハイペース" and last_pos <= 3.0:
-                    eval_parts.append("🔥 展開逆行:粘り込み")
-                elif pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - indiv_l3f) > 1.5:
-                    eval_parts.append("🔥 展開逆行:猛追")
+                # 負荷算出
+                load_score = 0.0
+                if pace_status == "ハイペース":
+                    load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
+                elif pace_status == "スローペース":
+                    load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
                 
+                eval_parts = []
+                # 逆行判定（バイアス ＋ 展開）
+                is_counter_target = False
+                
+                # バイアス逆行
                 if result_pos <= 5:
                     if bias_type == "前有利" and last_pos >= 10.0:
-                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行:後方強襲")
+                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行")
+                        is_counter_target = True
                     elif bias_type == "後有利" and last_pos <= 3.0:
-                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行:先行粘り")
+                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行")
+                        is_counter_target = True
+                
+                # 展開（ペース）逆行
+                if pace_status == "ハイペース" and last_pos <= 3.0:
+                    eval_parts.append("🔥 展開逆行")
+                    is_counter_target = True
+                elif pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - indiv_l3f) > 1.5:
+                    eval_parts.append("🔥 展開逆行")
+                    is_counter_target = True
                 
                 l3f_diff = f3f_val - indiv_l3f
                 if l3f_diff > 2.0: eval_parts.append("🚀 アガリ優秀")
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 
-                auto_comment = f"【{pace_status}/{bias_type}】{'/'.join(eval_parts) if eval_parts else '順境'}"
+                load_desc = f"負荷:{load_score:.1f}"
+                auto_comment = f"【{pace_status}/{bias_type}/{load_desc}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 
                 weight_adj = (weight - 56.0) * 0.1
                 rtc = (indiv_time - weight_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
@@ -137,7 +155,7 @@ with tab1:
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment,
-                    "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "", "result_pos": result_pos
+                    "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "★逆行狙い" if is_counter_target else "", "result_pos": result_pos
                 })
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
@@ -166,7 +184,7 @@ with tab2:
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
         display_df = display_df.copy()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
-        st.dataframe(display_df.sort_values("date", ascending=False), use_container_width=True)
+        st.dataframe(display_df.sort_values("date", ascending=False)[["date", "name", "last_race", "base_rtc", "f3f", "l3f", "load", "memo", "next_buy_flag"]], use_container_width=True)
 
 with tab4:
     st.header("🎯 シミュレーター & 統合評価")
@@ -189,17 +207,24 @@ with tab4:
                     b_match = 1 if abs(best_past['cushion'] - current_cush) <= 0.5 else 0
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
+                    
+                    # 【重要】逆行ボーナスの合算（バイアス逆行 or 展開逆行）
+                    counter_score = 0
+                    if "逆行" in str(h_latest['memo']):
+                        counter_score = 1
+                    
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
-                    total_score = b_match + rota_score + (1 if h_latest['next_buy_flag'] else 0)
+                    total_score = b_match + rota_score + counter_score + (1 if h_latest['next_buy_flag'] and "★" not in h_latest['next_buy_flag'] else 0)
+                    
                     grade = "S" if total_score >= 2 else "A" if total_score == 1 else "B"
-                    auto_memo = h_latest['memo'] if not pd.isna(h_latest['memo']) else ""
                     results.append({
                         "評価": grade, "馬名": h, "想定タイム": format_time(sim_rtc), 
-                        "馬場": "🔥" if b_match else "-", "解析メモ": auto_memo, 
-                        "買い条件": h_latest['next_buy_flag'], "raw_rtc": sim_rtc
+                        "前3F": h_latest['f3f'], "後3F": h_latest['l3f'],
+                        "馬場": "🔥" if b_match else "-", "解析メモ": h_latest['memo'], 
+                        "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc
                     })
                 res_df = pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])
-                st.table(res_df[["評価", "馬名", "想定タイム", "馬場", "解析メモ", "買い条件"]])
+                st.table(res_df[["評価", "馬名", "想定タイム", "前3F", "後3F", "馬場", "解析メモ", "買いフラグ"]])
 
 with tab3:
     st.header("🏁 答え合わせ & レース別履歴")
@@ -223,7 +248,7 @@ with tab3:
                     conn.update(data=df); st.success("保存完了")
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
-            st.dataframe(display_race_df[["name", "notes", "base_rtc", "l3f", "result_pos", "result_pop"]])
+            st.dataframe(display_race_df[["name", "notes", "base_rtc", "f3f", "l3f", "result_pos", "result_pop"]])
 
 with tab5:
     st.header("📈 トレンド")
@@ -237,17 +262,24 @@ with tab6:
     st.header("🗑 データベース管理")
     df = get_db_data()
     if not df.empty:
-        # 現在のデータベースの中身を表示
-        st.write("📁 現在保存されているデータ (最新順)")
+        st.subheader("🛠 特定データの削除")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            del_race = st.selectbox("削除するレースを選択", ["未選択"] + sorted(list(df['last_race'].unique())))
+            if del_race != "未選択" and st.button(f"「{del_race}」をDBから削除"):
+                conn.update(data=df[df['last_race'] != del_race]); st.success(f"{del_race} を削除しました"); st.rerun()
+        with col_d2:
+            del_horse = st.selectbox("削除する馬を選択", ["未選択"] + sorted(list(df['name'].unique())))
+            if del_horse != "未選択" and st.button(f"「{del_horse}」の全履歴を削除"):
+                conn.update(data=df[df['name'] != del_horse]); st.success(f"{del_horse} を削除しました"); st.rerun()
+        st.divider()
+        st.subheader("📁 保存済み全データ")
         view_df = df.copy()
         view_df['base_rtc'] = view_df['base_rtc'].apply(format_time)
         st.dataframe(view_df.sort_values("date", ascending=False), use_container_width=True)
-        
         st.divider()
-        st.warning("⚠️ データの消去を行う場合は以下にチェックを入れてください。")
-        if st.button("💣 全削除を実行する", disabled=not st.checkbox("消去を許可")):
+        st.subheader("💣 データベースの初期化")
+        if st.button("全データを一括削除する", disabled=not st.checkbox("全消去を実行する")):
             conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
-            st.success("全てのデータを削除しました。")
-            st.rerun()
-    else:
-        st.info("現在、データベースに保存されているデータはありません。")
+            st.success("全てのデータを削除しました。"); st.rerun()
+    else: st.info("現在、データベースに保存されているデータはありません。")
