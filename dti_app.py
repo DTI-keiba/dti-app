@@ -294,6 +294,7 @@ with tab6:
         res_pos = float(row['result_pos']) if not pd.isna(row['result_pos']) else 99.0
         load_pos = float(row['load']) if not pd.isna(row['load']) else 7.0
         
+        # 🌟 メモの【】内から最新のペース・バイアス情報を読み取る
         p_status = "ミドルペース"; b_type = "フラット"
         if "【" in memo and "】" in memo:
             header = memo.split("】")[0]
@@ -315,10 +316,7 @@ with tab6:
                 new_tags.append("🔥 展開逆行"); is_counter = True
 
         # next_buy_flag の更新
-        if is_counter:
-            updated_buy_flag = ("★逆行狙い " + buy_flag).strip()
-        else:
-            updated_buy_flag = buy_flag
+        updated_buy_flag = ("★逆行狙い " + buy_flag).strip() if is_counter else buy_flag
 
         # メモの再構築
         if "】" in memo:
