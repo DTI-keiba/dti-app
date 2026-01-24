@@ -14,7 +14,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # 🌟 API制限(429 Error)回避のためのキャッシュ設定
 @st.cache_data(ttl=300)
 def get_db_data_cached():
-    all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
+    # 🌟 カラムに race_l3f を追加
+    all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "race_l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
     try:
         df = conn.read(ttl=0)
         if df is None or df.empty:
@@ -125,6 +126,9 @@ with tab1:
                 if pace_diff < -1.0: pace_status = "ハイペース"
                 elif pace_diff > 1.0: pace_status = "スローペース"
                 st.info(f"🏁 前後半3F比較: {f3f_val:.1f} - {l3f_val:.1f} ({pace_status})")
+        # 🌟 レース上がり3Fの確認・修正用
+        l3f_val = st.number_input("レース上がり3F (自動計算値から修正可)", 0.0, 60.0, l3f_val, step=0.1)
+
     with col2: raw_input = st.text_area("JRA成績表貼り付け")
 
     if st.button("🚀 解析してDBへ保存"):
@@ -186,6 +190,7 @@ with tab1:
                 if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - l3f_candidate) > 1.5):
                     eval_parts.append("🔥 展開逆行"); is_counter_target = True
                 
+                # 🌟 指定された「レース上がり3F(l3f_val)」と比較
                 l3f_diff_vs_race = l3f_val - l3f_candidate
                 if l3f_diff_vs_race >= 0.5:
                     eval_parts.append("🚀 アガリ優秀")
@@ -201,7 +206,7 @@ with tab1:
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, 
                     "notes": f"{weight}kg", 
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "load": last_pos, "memo": auto_comment,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "race_l3f": l3f_val, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "★逆行狙い" if is_counter_target else "", "result_pos": result_pos
                 })
             if new_rows:
@@ -232,7 +237,7 @@ with tab2:
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
         display_df = display_df.copy()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
-        st.dataframe(display_df.sort_values("date", ascending=False)[["date", "name", "last_race", "base_rtc", "f3f", "l3f", "load", "memo", "next_buy_flag"]], use_container_width=True)
+        st.dataframe(display_df.sort_values("date", ascending=False)[["date", "name", "last_race", "base_rtc", "f3f", "l3f", "race_l3f", "load", "memo", "next_buy_flag"]], use_container_width=True)
 
 with tab3:
     st.header("🏁 答え合わせ & レース別履歴")
@@ -261,7 +266,7 @@ with tab3:
                         st.rerun()
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
-            st.dataframe(display_race_df[["name", "notes", "base_rtc", "f3f", "l3f", "result_pos", "result_pop"]])
+            st.dataframe(display_race_df[["name", "notes", "base_rtc", "f3f", "l3f", "race_l3f", "result_pos", "result_pop"]])
 
 with tab4:
     st.header("🎯 シミュレーター & 統合評価")
@@ -304,18 +309,20 @@ with tab5:
 with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
-    # 🌟 再解析・保存時のアガリ評価更新ロジック
-    def update_eval_tags(row_memo, f3f, l3f):
+
+    # 🌟 再解析ロジックを race_l3f 参照版に更新
+    def update_eval_tags(row_memo, race_l3f, indiv_l3f):
         base_memo = str(row_memo) if not pd.isna(row_memo) else ""
-        # 既存の評価タグを一旦消去
         cleaned_memo = base_memo.replace("🚀 アガリ優秀", "").replace("📉 失速大", "").replace("//", "/").strip("/")
         
         eval_parts = []
-        l3f_val = float(f3f) # ここでは簡易的にf3fをレース上がり想定として判定（必要に応じ外部定義参照）
-        # ※本来はレース全体の上がりが必要だが、既存コードの文脈に合わせf3f-l3f差分等で再計算
-        diff = float(f3f) - float(l3f)
-        if diff >= 0.5: eval_parts.append("🚀 アガリ優秀")
-        elif diff <= -1.0: eval_parts.append("📉 失速大")
+        r_l3f = float(race_l3f) if not pd.isna(race_l3f) else 0.0
+        i_l3f = float(indiv_l3f) if not pd.isna(indiv_l3f) else 0.0
+        
+        if r_l3f > 0:
+            diff = r_l3f - i_l3f
+            if diff >= 0.5: eval_parts.append("🚀 アガリ優秀")
+            elif diff <= -1.0: eval_parts.append("📉 失速大")
         
         if eval_parts:
             new_tag = "/".join(eval_parts)
@@ -323,13 +330,13 @@ with tab6:
                 parts = cleaned_memo.split("】")
                 return parts[0] + "】" + (parts[1] + "/" + new_tag).strip("/")
             else:
-                return cleaned_memo + "/" + new_tag
+                return (cleaned_memo + "/" + new_tag).strip("/")
         return cleaned_memo
 
     if st.button("🔄 スプレッドシート側の修正を読み込んで再解析"):
         st.cache_data.clear(); df = get_db_data()
         for i, row in df.iterrows():
-            df.at[i, 'memo'] = update_eval_tags(row['memo'], row['f3f'], row['l3f'])
+            df.at[i, 'memo'] = update_eval_tags(row['memo'], row['race_l3f'], row['l3f'])
         if safe_update(df):
             st.success("反映完了")
             st.rerun()
@@ -337,38 +344,33 @@ with tab6:
     if not df.empty:
         st.subheader("🛠️ データの手動修正")
         edit_display_df = df.copy(); edit_display_df['base_rtc'] = edit_display_df['base_rtc'].apply(format_time)
+        # 🌟 データエディターに race_l3f を追加
         edited_df = st.data_editor(edit_display_df.sort_values("date", ascending=False), num_rows="dynamic", key="data_editor_main")
         if st.button("💾 修正を保存する"):
             save_df = edited_df.copy(); save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
             save_df['l3f'] = pd.to_numeric(save_df['l3f'], errors='coerce').fillna(0.0)
+            save_df['race_l3f'] = pd.to_numeric(save_df['race_l3f'], errors='coerce').fillna(0.0)
             for i, row in save_df.iterrows():
-                # 🌟 保存時に最新の数値でタグを再生成
-                save_df.at[i, 'memo'] = update_eval_tags(row['memo'], row['f3f'], row['l3f'])
+                save_df.at[i, 'memo'] = update_eval_tags(row['memo'], row['race_l3f'], row['l3f'])
             with st.spinner("DB保存中..."):
                 if safe_update(save_df):
                     st.success("修正完了")
                     st.rerun()
         
         st.divider()
-        st.subheader("❌ 特定データの削除（要確認）")
+        st.subheader("❌ 特定データの削除")
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + race_list)
             if del_race != "未選択":
-                confirm_race = st.checkbox(f"「{del_race}」の全データを削除してよろしいですか？", key="confirm_race")
-                if confirm_race:
-                    if st.button(f"🚨 「{del_race}」を完全に削除", type="primary"):
-                        if safe_update(df[df['last_race'] != del_race]):
-                            st.success("削除しました")
-                            st.rerun()
+                if st.button(f"🚨 「{del_race}」を完全に削除", type="primary"):
+                    if safe_update(df[df['last_race'] != del_race]):
+                        st.success("削除しました"); st.rerun()
         with col_d2:
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択":
-                confirm_horse = st.checkbox(f"「{del_horse}」の全履歴を削除してよろしいですか？", key="confirm_horse")
-                if confirm_horse:
-                    if st.button(f"🚨 「{del_horse}」を完全に削除", type="primary"):
-                        if safe_update(df[df['name'] != del_horse]):
-                            st.success("削除しました")
-                            st.rerun()
+                if st.button(f"🚨 「{del_horse}」を完全に削除", type="primary"):
+                    if safe_update(df[df['name'] != del_horse]):
+                        st.success("削除しました"); st.rerun()
