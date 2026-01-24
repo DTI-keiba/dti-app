@@ -14,7 +14,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_db_data():
     all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
     try:
-        # スプレッドシート側の修正を即座に反映させるため ttl=0 を厳守
         df = conn.read(ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
@@ -55,31 +54,23 @@ COURSE_DATA = {
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📝 解析・保存", "🐎 馬別履歴", "🏁 レース別履歴", "🎯 シミュレーター", "📈 馬場トレンド", "🗑 データ管理"])
 
 with tab1:
-    # --- 🌟 追加機能: 注目馬ピックアップ ---
     df_pickup = get_db_data()
     if not df_pickup.empty:
         st.subheader("🎯 次走注目馬（逆行評価ピックアップ）")
-        # メモの内容から逆行タイプを判定
         pickup_rows = []
         for i, row in df_pickup.iterrows():
             memo = str(row['memo'])
-            b_flag = "💎" in memo  # バイアス逆行
-            p_flag = "🔥" in memo  # 展開（ペース）逆行
-            
+            b_flag = "💎" in memo
+            p_flag = "🔥" in memo
             if b_flag or p_flag:
                 detail = ""
                 if b_flag and p_flag: detail = "【💥両方逆行】"
                 elif b_flag: detail = "【💎バイアス逆行】"
                 elif p_flag: detail = "【🔥ペース逆行】"
-                
                 pickup_rows.append({
-                    "馬名": row['name'],
-                    "逆行タイプ": detail,
-                    "前走": row['last_race'],
-                    "日付": row['date'].strftime('%Y-%m-%d') if not pd.isna(row['date']) else "",
-                    "解析メモ": memo
+                    "馬名": row['name'], "逆行タイプ": detail, "前走": row['last_race'],
+                    "日付": row['date'].strftime('%Y-%m-%d') if not pd.isna(row['date']) else "", "解析メモ": memo
                 })
-        
         if pickup_rows:
             st.dataframe(pd.DataFrame(pickup_rows).sort_values("日付", ascending=False), use_container_width=True, hide_index=True)
         else:
@@ -99,23 +90,21 @@ with tab1:
         cush = st.number_input("クッション値", 7.0, 12.0, 9.5, step=0.1) if t_type == "芝" else 9.5
         w_4c = st.number_input("含水率：4角 (%)", 0.0, 50.0, 10.0, step=0.1)
         w_goal = st.number_input("含水率：ゴール前 (%)", 0.0, 50.0, 10.0, step=0.1)
+        # 🌟 馬場指数をそのまま入力（指数 10 = 1.0秒 として計算）
+        track_index = st.number_input("馬場指数", -50, 50, 0, step=1, help="時計が掛かるほどプラス、速いほどマイナス。指数10で1秒補正されます。")
         bias_val = st.slider("馬場バイアス (内有利 -1.0 ↔ 外有利 +1.0)", -1.0, 1.0, 0.0)
 
     col1, col2 = st.columns(2)
     with col1: 
         lap_input = st.text_area("JRAレースラップ (例: 12.5-11.0-12.0...)")
-        f3f_val = 0.0; l3f_val = 0.0; pace_status = "ミドルペース"
-        pace_diff = 0.0
+        f3f_val = 0.0; l3f_val = 0.0; pace_status = "ミドルペース"; pace_diff = 0.0
         if lap_input:
             laps = [float(x) for x in re.findall(r'\d+\.\d', lap_input)]
             if len(laps) >= 3:
-                f3f_val = sum(laps[:3])
-                l3f_val = sum(laps[-3:])
-                pace_diff = f3f_val - l3f_val
+                f3f_val = sum(laps[:3]); l3f_val = sum(laps[-3:]); pace_diff = f3f_val - l3f_val
                 if pace_diff < -1.0: pace_status = "ハイペース"
                 elif pace_diff > 1.0: pace_status = "スローペース"
                 st.info(f"🏁 前後半3F比較: {f3f_val:.1f} - {l3f_val:.1f} ({pace_status})")
-
     with col2: raw_input = st.text_area("JRA成績表貼り付け")
 
     if st.button("🚀 解析してDBへ保存"):
@@ -125,46 +114,33 @@ with tab1:
             for line in lines:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
-                res_pos_match = re.match(r'^(\d{1,2})', line)
-                res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
+                res_pos_match = re.match(r'^(\d{1,2})', line); res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
                 pos_finds = re.findall(r'(\d{1,2})[\s-](\d{1,2})[\s-](\d{1,2})[\s-](\d{1,2})', line)
                 four_c_pos = float(pos_finds[0][3]) if pos_finds else 5.0
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
-
             top_3_pos = [d["four_c_pos"] for d in parsed_data if d["res_pos"] <= 3]
             avg_top_pos = sum(top_3_pos) / len(top_3_pos) if top_3_pos else 7.0
             bias_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
-
             new_rows = []
             for entry in parsed_data:
                 line = entry["line"]; last_pos = entry["four_c_pos"]; result_pos = entry["res_pos"]
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
-                time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
-                indiv_time = m_p * 60 + s_p
-                weight_match = re.search(r'\s([4-6]\d\.\d)\s', line)
-                weight = float(weight_match.group(1)) if weight_match else 0.0
-                
-                l3f_candidate = 0.0
-                l3f_match = re.search(r'(\d{2}\.\d)\s*\d{3}\(', line)
-                if l3f_match:
-                    l3f_candidate = float(l3f_match.group(1))
+                time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':')); indiv_time = m_p * 60 + s_p
+                weight_match = re.search(r'\s([4-6]\d\.\d)\s', line); weight = float(weight_match.group(1)) if weight_match else 0.0
+                l3f_candidate = 0.0; l3f_match = re.search(r'(\d{2}\.\d)\s*\d{3}\(', line)
+                if l3f_match: l3f_candidate = float(l3f_match.group(1))
                 else:
                     decimal_finds = re.findall(r'(\d{2}\.\d)', line)
                     for d_val in decimal_finds:
                         f_val = float(d_val)
-                        if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.5:
-                            l3f_candidate = f_val
-                            break
+                        if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.5: l3f_candidate = f_val; break
                 if l3f_candidate == 0.0: l3f_candidate = l3f_val 
-                
-                name = "不明"
-                parts = re.findall(r'([ァ-ヶー]{2,})', line)
+                name = "不明"; parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
                 load_score = 0.0
                 if pace_status == "ハイペース": load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
                 elif pace_status == "スローペース": load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
-                eval_parts = []
-                is_counter_target = False
+                eval_parts = []; is_counter_target = False
                 if result_pos <= 5:
                     if (bias_type == "前有利" and last_pos >= 10.0) or (bias_type == "後有利" and last_pos <= 3.0):
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行"); is_counter_target = True
@@ -175,7 +151,9 @@ with tab1:
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 weight_adj = (weight - 56.0) * 0.1
-                rtc = (indiv_time - weight_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
+                # 🌟 馬場指数を秒数に換算して適用
+                actual_time_adj = track_index / 10.0
+                rtc = (indiv_time - weight_adj - actual_time_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "load": last_pos, "memo": auto_comment,
@@ -184,13 +162,9 @@ with tab1:
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
                 with st.spinner("DB保存中..."):
-                    time.sleep(1.0)
-                    conn.update(data=updated_df)
-                    st.cache_data.clear()
-                    time.sleep(1.0)
-                    st.success(f"✅ 解析完了")
-                    st.rerun()
+                    time.sleep(1.0); conn.update(data=updated_df); st.cache_data.clear(); time.sleep(1.0); st.success(f"✅ 解析完了"); st.rerun()
 
+# --- Tab 2 ～ Tab 6 は以前の修正をそのまま維持 ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
@@ -267,10 +241,8 @@ with tab5:
 with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
-    
     if st.button("🔄 スプレッドシート側の修正を読み込んで再解析"):
-        st.cache_data.clear()
-        df = get_db_data()
+        st.cache_data.clear(); df = get_db_data()
         for i, row in df.iterrows():
             eval_parts = []
             f3f_cur = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
@@ -283,36 +255,28 @@ with tab6:
                 new_tag = "/".join(eval_parts)
                 if "】" in base_memo: df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
                 else: df.at[i, 'memo'] = "【手動更新解析】" + new_tag
-        conn.update(data=df)
-        st.success("スプレッドシートの変更を反映し、再解析を完了しました。")
-        st.rerun()
+        conn.update(data=df); st.success("反映完了"); st.rerun()
 
     if not df.empty:
         st.subheader("🛠️ データの手動修正")
-        edit_display_df = df.copy()
-        edit_display_df['base_rtc'] = edit_display_df['base_rtc'].apply(format_time)
+        edit_display_df = df.copy(); edit_display_df['base_rtc'] = edit_display_df['base_rtc'].apply(format_time)
         edited_df = st.data_editor(edit_display_df.sort_values("date", ascending=False), num_rows="dynamic", key="data_editor_main")
         if st.button("💾 修正を保存する"):
-            save_df = edited_df.copy()
-            save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
+            save_df = edited_df.copy(); save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
             save_df['l3f'] = pd.to_numeric(save_df['l3f'], errors='coerce').fillna(0.0)
             for i, row in save_df.iterrows():
                 eval_parts = []
-                f3f_cur = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
-                l3f_cur = float(row['l3f']) if not pd.isna(row['l3f']) else 0.0
-                diff = f3f_cur - l3f_cur
+                diff = float(row['f3f']) - float(row['l3f'])
                 if diff > 2.0: eval_parts.append("🚀 アガリ優秀")
                 elif diff < -2.0: eval_parts.append("📉 失速大")
-                base_memo = str(row['memo']) if not pd.isna(row['memo']) else ""
+                base_memo = str(row['memo'])
                 if eval_parts:
                     new_tag = "/".join(eval_parts)
                     if "】" in base_memo: save_df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
                     else: save_df.at[i, 'memo'] = "【修正解析】" + new_tag
             with st.spinner("DB保存中..."):
-                try:
-                    time.sleep(1.0); conn.update(data=save_df); st.cache_data.clear(); time.sleep(1.5); st.success("修正完了"); st.rerun()
+                try: time.sleep(1.0); conn.update(data=save_df); st.cache_data.clear(); time.sleep(1.5); st.success("修正完了"); st.rerun()
                 except Exception as e: st.error(f"保存エラー: {e}")
-
         st.divider()
         st.subheader("❌ 特定データの削除")
         col_d1, col_d2 = st.columns(2)
