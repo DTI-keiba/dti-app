@@ -162,7 +162,6 @@ with tab1:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':')); indiv_time = m_p * 60 + s_p
                 
-                # 斤量抽出
                 weight_match = re.search(r'\s([4-6]\d\.\d)\s', line); weight = float(weight_match.group(1)) if weight_match else 0.0
                 
                 l3f_candidate = 0.0; l3f_match = re.search(r'(\d{2}\.\d)\s*\d{3}\(', line)
@@ -197,7 +196,7 @@ with tab1:
                 
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, 
-                    "notes": f"{weight}kg", # 🌟 斤量のみに修正
+                    "notes": f"{weight}kg", 
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "★逆行狙い" if is_counter_target else "", "result_pos": result_pos
                 })
@@ -208,7 +207,6 @@ with tab1:
                         st.success(f"✅ 解析完了")
                         st.rerun()
 
-# --- Tab2 以降（既存通り） ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
@@ -242,9 +240,16 @@ with tab3:
             race_df = df[df['last_race'] == sel_race].copy()
             with st.form("result_form"):
                 for i, row in race_df.iterrows():
+                    # 🌟 エラー修正箇所: number_inputのmax_valueを100に拡大し、初期値が範囲外にならないよう最小化処理を追加
+                    val_pos = int(row['result_pos']) if not pd.isna(row['result_pos']) else 0
+                    val_pop = int(row['result_pop']) if not pd.isna(row['result_pop']) else 0
+                    
                     col_r1, col_r2 = st.columns(2)
-                    with col_r1: race_df.at[i, 'result_pos'] = st.number_input(f"{row['name']} 着順", 0, 18, value=int(row['result_pos']) if not pd.isna(row['result_pos']) else 0, key=f"pos_{i}")
-                    with col_r2: race_df.at[i, 'result_pop'] = st.number_input(f"{row['name']} 人気", 0, 18, value=int(row['result_pop']) if not pd.isna(row['result_pop']) else 0, key=f"pop_{i}")
+                    with col_r1: 
+                        race_df.at[i, 'result_pos'] = st.number_input(f"{row['name']} 着順", 0, 100, value=min(max(0, val_pos), 100), key=f"pos_{i}")
+                    with col_r2: 
+                        race_df.at[i, 'result_pop'] = st.number_input(f"{row['name']} 人気", 0, 100, value=min(max(0, val_pop), 100), key=f"pop_{i}")
+                
                 if st.form_submit_button("結果を保存"):
                     for i, row in race_df.iterrows():
                         df.at[i, 'result_pos'], df.at[i, 'result_pop'] = row['result_pos'], row['result_pop']
