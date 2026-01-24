@@ -109,16 +109,23 @@ with tab1:
                 indiv_time = m_p * 60 + s_p
                 weight_match = re.search(r'\s([4-6]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 0.0
-                l3f_candidate = l3f_val
+                
+                # --- 個別上がり3F抽出の修正（全馬共通になるのを防止） ---
+                l3f_candidate = 0.0 # 初期値をレース全体タイムにしない
                 search_after_pos = re.split(r'\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}', line)
                 if len(search_after_pos) > 1:
                     post_text = search_after_pos[-1]
                     decimal_finds = re.findall(r'(\d{2}\.\d)', post_text)
                     for d_val in decimal_finds:
                         f_val = float(d_val)
-                        if 31.0 <= f_val <= 45.0 and abs(f_val - weight) > 0.1:
+                        # 30.0〜46.0の範囲、かつ斤量と一致しないものを馬個別の上がりとして採用
+                        if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.1:
                             l3f_candidate = f_val
                             break
+                # 個別が見つからなかった場合のみ、レース全体の上がりを代用（または手動修正前提で0にする）
+                if l3f_candidate == 0.0:
+                    l3f_candidate = l3f_val 
+
                 name = "不明"
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
@@ -153,7 +160,6 @@ with tab2:
     if not df.empty:
         col_s1, col_s2 = st.columns([1, 1])
         with col_s1: search_h = st.text_input("馬名で検索", key="search_h")
-        # --- 修正箇所：馬名のソートエラー防止 ---
         unique_horses = sorted([str(x) for x in df['name'].dropna().unique()])
         with col_s2: target_h = st.selectbox("条件を編集する馬を選択", ["未選択"] + unique_horses)
         if target_h != "未選択":
@@ -173,7 +179,6 @@ with tab3:
     st.header("🏁 答え合わせ & レース別履歴")
     df = get_db_data()
     if not df.empty:
-        # --- 修正箇所：レース名のソートエラー防止 ---
         race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
         sel_race = st.selectbox("レース選択", race_list)
         if sel_race:
@@ -195,7 +200,6 @@ with tab4:
     st.header("🎯 シミュレーター & 統合評価")
     df = get_db_data()
     if not df.empty:
-        # --- 修正箇所：馬名のソートエラー防止 ---
         selected = st.multiselect("出走予定馬を選択", sorted([str(x) for x in df['name'].dropna().unique()]))
         if selected:
             col_cfg1, col_cfg2 = st.columns(2)
@@ -243,13 +247,11 @@ with tab6:
         st.subheader("❌ 特定データの削除")
         col_d1, col_d2 = st.columns(2)
         with col_d1:
-            # --- 修正箇所：レース名のソートエラー防止 ---
             race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + race_list)
             if del_race != "未選択" and st.button(f"「{del_race}」を削除"):
                 conn.update(data=df[df['last_race'] != del_race]); st.rerun()
         with col_d2:
-            # --- 修正箇所：馬名のソートエラー防止 ---
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
