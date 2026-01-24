@@ -28,6 +28,22 @@ def get_db_data():
     except:
         return pd.DataFrame(columns=all_cols)
 
+# 🌟 エラー回避のための安全な更新関数
+def safe_update(df):
+    max_retries = 3
+    for i in range(max_retries):
+        try:
+            conn.update(data=df)
+            st.cache_data.clear()
+            return True
+        except Exception as e:
+            if i < max_retries - 1:
+                time.sleep(2)  # 2秒待機してリトライ
+                continue
+            else:
+                st.error(f"Google Sheetsの更新に失敗しました。権限設定やAPI制限を確認してください: {e}")
+                return False
+
 def format_time(seconds):
     if seconds is None or seconds <= 0 or pd.isna(seconds): return ""
     if isinstance(seconds, str): return seconds
@@ -156,7 +172,6 @@ with tab1:
                 load_time_adj = load_score / 10.0
                 rtc = (indiv_time - weight_adj - actual_time_adj - load_time_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
-                # 🌟 notes欄に斤量と4角順位をセット
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg / 4角:{int(last_pos)}",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "load": last_pos, "memo": auto_comment,
@@ -165,9 +180,10 @@ with tab1:
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
                 with st.spinner("DB保存中..."):
-                    time.sleep(1.0); conn.update(data=updated_df); st.cache_data.clear(); time.sleep(1.0); st.success(f"✅ 解析完了"); st.rerun()
+                    if safe_update(updated_df):
+                        st.success(f"✅ 解析完了")
+                        st.rerun()
 
-# --- 以降のコード（Tab2-Tab6）は一切変更なし ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
@@ -183,7 +199,9 @@ with tab2:
                 new_flag = st.text_input("次走への個別の「買い」条件", value=df.at[h_idx, 'next_buy_flag'] if not pd.isna(df.at[h_idx, 'next_buy_flag']) else "")
                 if st.form_submit_button("設定を保存"):
                     df.at[h_idx, 'memo'], df.at[h_idx, 'next_buy_flag'] = new_memo, new_flag
-                    time.sleep(1.0); conn.update(data=df); st.cache_data.clear(); st.success("更新完了"); st.rerun()
+                    if safe_update(df):
+                        st.success("更新完了")
+                        st.rerun()
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
         display_df = display_df.copy()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
@@ -205,7 +223,9 @@ with tab3:
                 if st.form_submit_button("結果を保存"):
                     for i, row in race_df.iterrows():
                         df.at[i, 'result_pos'], df.at[i, 'result_pop'] = row['result_pos'], row['result_pop']
-                    time.sleep(1.0); conn.update(data=df); st.cache_data.clear(); st.success("保存完了"); st.rerun()
+                    if safe_update(df):
+                        st.success("保存完了")
+                        st.rerun()
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
             st.dataframe(display_race_df[["name", "notes", "base_rtc", "f3f", "l3f", "result_pos", "result_pop"]])
@@ -258,7 +278,9 @@ with tab6:
                 new_tag = "/".join(eval_parts)
                 if "】" in base_memo: df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
                 else: df.at[i, 'memo'] = "【手動更新解析】" + new_tag
-        conn.update(data=df); st.success("反映完了"); st.rerun()
+        if safe_update(df):
+            st.success("反映完了")
+            st.rerun()
 
     if not df.empty:
         st.subheader("🛠️ データの手動修正")
@@ -278,8 +300,9 @@ with tab6:
                     if "】" in base_memo: save_df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
                     else: save_df.at[i, 'memo'] = "【修正解析】" + new_tag
             with st.spinner("DB保存中..."):
-                try: time.sleep(1.0); conn.update(data=save_df); st.cache_data.clear(); time.sleep(1.5); st.success("修正完了"); st.rerun()
-                except Exception as e: st.error(f"保存エラー: {e}")
+                if safe_update(save_df):
+                    st.success("修正完了")
+                    st.rerun()
         
         st.divider()
         st.subheader("❌ 特定データの削除（要確認）")
@@ -291,7 +314,9 @@ with tab6:
                 confirm_race = st.checkbox(f"「{del_race}」の全データを削除してよろしいですか？", key="confirm_race")
                 if confirm_race:
                     if st.button(f"🚨 「{del_race}」を完全に削除", type="primary"):
-                        time.sleep(1.0); conn.update(data=df[df['last_race'] != del_race]); st.cache_data.clear(); st.success("削除しました"); st.rerun()
+                        if safe_update(df[df['last_race'] != del_race]):
+                            st.success("削除しました")
+                            st.rerun()
         with col_d2:
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
@@ -299,4 +324,6 @@ with tab6:
                 confirm_horse = st.checkbox(f"「{del_horse}」の全履歴を削除してよろしいですか？", key="confirm_horse")
                 if confirm_horse:
                     if st.button(f"🚨 「{del_horse}」を完全に削除", type="primary"):
-                        time.sleep(1.0); conn.update(data=df[df['name'] != del_horse]); st.cache_data.clear(); st.success("削除しました"); st.rerun()
+                        if safe_update(df[df['name'] != del_horse]):
+                            st.success("削除しました")
+                            st.rerun()
