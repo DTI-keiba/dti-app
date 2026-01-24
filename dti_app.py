@@ -185,9 +185,14 @@ with tab1:
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行"); is_counter_target = True
                 if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - l3f_candidate) > 1.5):
                     eval_parts.append("🔥 展開逆行"); is_counter_target = True
-                l3f_diff = f3f_val - l3f_candidate
-                if l3f_diff > 2.0: eval_parts.append("🚀 アガリ優秀")
-                elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
+                
+                # 🌟 判定基準の変更: レース上がり(l3f_val)と各馬の上がり(l3f_candidate)を比較
+                l3f_diff_vs_race = l3f_val - l3f_candidate
+                if l3f_diff_vs_race >= 0.5: # レース上がりより0.5秒以上速い
+                    eval_parts.append("🚀 アガリ優秀")
+                elif l3f_diff_vs_race <= -1.0: # レース上がりより1.0秒以上遅い
+                    eval_parts.append("📉 失速大")
+                    
                 auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 weight_adj = (weight - 56.0) * 0.1
                 actual_time_adj = track_index / 10.0
@@ -207,6 +212,7 @@ with tab1:
                         st.success(f"✅ 解析完了")
                         st.rerun()
 
+# --- 以降のタブは修正なし ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
@@ -279,10 +285,8 @@ with tab4:
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
                     
-                    # 🌟 初距離（前走と異なる距離）の場合のタイム推定ロジック
                     prev_dist = h_latest['dist']
                     if prev_dist and prev_dist > 0 and prev_dist != target_dist:
-                        # 1mあたりの平均タイムを算出して次走距離に換算
                         avg_time_per_meter = h_latest['base_rtc'] / prev_dist
                         sim_rtc = (avg_time_per_meter * target_dist) + (COURSE_DATA[target_c] * (target_dist/1600.0))
                     else:
