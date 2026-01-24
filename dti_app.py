@@ -16,11 +16,9 @@ def get_db_data():
         df = conn.read(ttl="0")
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
-        # 欠損列の補完
         for col in all_cols:
             if col not in df.columns:
                 df[col] = None
-        # 型変換
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
         df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
         df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
@@ -78,15 +76,15 @@ with tab1:
 
     if st.button("🚀 解析してDBへ保存"):
         if raw_input and f3f_val > 0:
-            lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 20]
+            lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 15]
             parsed_data = []
             for line in lines:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
                 res_pos_match = re.match(r'^(\d{1,2})', line)
                 res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
-                pos_match = re.search(r'\d{1,2}-\d{1,2}-\d{1,2}-(\d{1,2})', line)
-                four_c_pos = float(pos_match.group(1)) if pos_match else 5.0
+                pos_finds = re.findall(r'(\d{1,2})[\s-](\d{1,2})[\s-](\d{1,2})[\s-](\d{1,2})', line)
+                four_c_pos = float(pos_finds[0][3]) if pos_finds else 5.0
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
 
             top_3_pos = [d["four_c_pos"] for d in parsed_data if d["res_pos"] <= 3]
@@ -99,50 +97,40 @@ with tab1:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
-                
-                # 上がり3Fの抽出ロジック（改善版）
                 weight_match = re.search(r'\s([4-6]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 0.0
-                all_decimals = re.findall(r'(\d{2}\.\d)', line)
-                indiv_l3f = l3f_val
-                # 逆順で最初に見つかった「斤量でない30~46の数値」を上がり3Fとする
-                for val_str in reversed(all_decimals):
-                    f_val = float(val_str)
-                    if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.1:
-                        indiv_l3f = f_val
-                        break
-                
+                l3f_candidate = l3f_val
+                search_after_pos = re.split(r'\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}', line)
+                if len(search_after_pos) > 1:
+                    post_text = search_after_pos[-1]
+                    decimal_finds = re.findall(r'(\d{2}\.\d)', post_text)
+                    for d_val in decimal_finds:
+                        f_val = float(d_val)
+                        if 31.0 <= f_val <= 45.0 and abs(f_val - weight) > 0.1:
+                            l3f_candidate = f_val
+                            break
                 name = "不明"
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
-
                 load_score = 0.0
-                if pace_status == "ハイペース":
-                    load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
-                elif pace_status == "スローペース":
-                    load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
-                
+                if pace_status == "ハイペース": load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
+                elif pace_status == "スローペース": load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
                 eval_parts = []
                 is_counter_target = False
                 if result_pos <= 5:
                     if (bias_type == "前有利" and last_pos >= 10.0) or (bias_type == "後有利" and last_pos <= 3.0):
-                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行")
-                        is_counter_target = True
-                if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - indiv_l3f) > 1.5):
-                    eval_parts.append("🔥 展開逆行")
-                    is_counter_target = True
-                
-                l3f_diff = f3f_val - indiv_l3f
+                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行"); is_counter_target = True
+                if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - l3f_candidate) > 1.5):
+                    eval_parts.append("🔥 展開逆行"); is_counter_target = True
+                l3f_diff = f3f_val - l3f_candidate
                 if l3f_diff > 2.0: eval_parts.append("🚀 アガリ優秀")
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
-                
                 auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 weight_adj = (weight - 56.0) * 0.1
                 rtc = (indiv_time - weight_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
-                
                 new_rows.append({
                     "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg",
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": indiv_l3f, "load": last_pos, "memo": auto_comment,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "★逆行狙い" if is_counter_target else "", "result_pos": result_pos
                 })
             if new_rows:
@@ -199,7 +187,7 @@ with tab4:
         if selected:
             col_cfg1, col_cfg2 = st.columns(2)
             with col_cfg1:
-                target_c, target_dist = st.selectbox("次走の競馬場", list(COURSE_DATA.keys())), st.selectbox("次走の距離 (m)", list(range(1000, 3700, 100)), index=6)
+                target_c, target_dist = st.selectbox("次走の競馬場", list(COURSE_DATA.keys()), key="sc"), st.selectbox("距離", list(range(1000, 3700, 100)), index=6)
             with col_cfg2:
                 current_cush = st.slider("想定クッション値", 7.0, 12.0, 9.5)
             if st.button("🏁 統合スコア算出"):
@@ -212,8 +200,7 @@ with tab4:
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
                     sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
-                    total_score = b_match + rota_score + counter_score + (1 if h_latest['next_buy_flag'] and "★" not in h_latest['next_buy_flag'] else 0)
-                    results.append({"評価": "S" if total_score >= 2 else "A" if total_score == 1 else "B", "馬名": h, "想定タイム": format_time(sim_rtc), "前3F": h_latest['f3f'], "後3F": h_latest['l3f'], "馬場": "🔥" if b_match else "-", "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc})
+                    results.append({"評価": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B", "馬名": h, "想定タイム": format_time(sim_rtc), "前3F": h_latest['f3f'], "後3F": h_latest['l3f'], "馬場": "🔥" if b_match else "-", "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc})
                 st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム", "前3F", "後3F", "馬場", "解析メモ", "買いフラグ"]])
 
 with tab5:
@@ -225,9 +212,19 @@ with tab5:
         if not trend_df.empty: st.line_chart(trend_df.set_index("date")[["cushion", "water"]])
 
 with tab6:
-    st.header("🗑 データベース管理")
+    st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
     if not df.empty:
+        st.subheader("🛠️ データの手動修正（エディタ）")
+        st.info("表の中の数値を直接書き換えて「修正を保存」を押してください。")
+        edited_df = st.data_editor(df.sort_values("date", ascending=False), num_rows="dynamic", key="data_editor_main")
+        if st.button("💾 修正を保存する"):
+            conn.update(data=edited_df)
+            st.success("データベースを更新しました。")
+            st.rerun()
+
+        st.divider()
+        st.subheader("❌ 特定データの削除")
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + sorted(list(df['last_race'].unique())))
@@ -237,7 +234,6 @@ with tab6:
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + sorted(list(df['name'].unique())))
             if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
                 conn.update(data=df[df['name'] != del_horse]); st.rerun()
-        st.dataframe(df.sort_values("date", ascending=False), use_container_width=True)
-        if st.button("全データ初期化", disabled=not st.checkbox("本当に全消去する")):
+        if st.button("💣 全データ初期化", disabled=not st.checkbox("本当に全消去する")):
             conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
             st.rerun()
