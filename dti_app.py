@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+import time # 追加
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
@@ -109,23 +110,17 @@ with tab1:
                 indiv_time = m_p * 60 + s_p
                 weight_match = re.search(r'\s([4-6]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 0.0
-                
-                # --- 個別上がり3F抽出の修正（全馬共通になるのを防止） ---
-                l3f_candidate = 0.0 # 初期値をレース全体タイムにしない
+                l3f_candidate = 0.0
                 search_after_pos = re.split(r'\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}', line)
                 if len(search_after_pos) > 1:
                     post_text = search_after_pos[-1]
                     decimal_finds = re.findall(r'(\d{2}\.\d)', post_text)
                     for d_val in decimal_finds:
                         f_val = float(d_val)
-                        # 30.0〜46.0の範囲、かつ斤量と一致しないものを馬個別の上がりとして採用
                         if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.1:
                             l3f_candidate = f_val
                             break
-                # 個別が見つからなかった場合のみ、レース全体の上がりを代用（または手動修正前提で0にする）
-                if l3f_candidate == 0.0:
-                    l3f_candidate = l3f_val 
-
+                if l3f_candidate == 0.0: l3f_candidate = l3f_val 
                 name = "不明"
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
@@ -152,6 +147,7 @@ with tab1:
                 })
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
+                time.sleep(1) # API制限回避用
                 conn.update(data=updated_df); st.success(f"✅ 解析完了"); st.rerun()
 
 with tab2:
@@ -169,7 +165,7 @@ with tab2:
                 new_flag = st.text_input("次走への個別の「買い」条件", value=df.at[h_idx, 'next_buy_flag'] if not pd.isna(df.at[h_idx, 'next_buy_flag']) else "")
                 if st.form_submit_button("設定を保存"):
                     df.at[h_idx, 'memo'], df.at[h_idx, 'next_buy_flag'] = new_memo, new_flag
-                    conn.update(data=df); st.success("更新完了"); st.rerun()
+                    time.sleep(0.5); conn.update(data=df); st.success("更新完了"); st.rerun()
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
         display_df = display_df.copy()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
@@ -191,7 +187,7 @@ with tab3:
                 if st.form_submit_button("結果を保存"):
                     for i, row in race_df.iterrows():
                         df.at[i, 'result_pos'], df.at[i, 'result_pop'] = row['result_pos'], row['result_pop']
-                    conn.update(data=df); st.success("保存完了"); st.rerun()
+                    time.sleep(0.5); conn.update(data=df); st.success("保存完了"); st.rerun()
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
             st.dataframe(display_race_df[["name", "notes", "base_rtc", "f3f", "l3f", "result_pos", "result_pop"]])
@@ -205,8 +201,7 @@ with tab4:
             col_cfg1, col_cfg2 = st.columns(2)
             with col_cfg1:
                 target_c, target_dist = st.selectbox("次走の競馬場", list(COURSE_DATA.keys()), key="sc"), st.selectbox("距離", list(range(1000, 3700, 100)), index=6)
-            with col_cfg2:
-                current_cush = st.slider("想定クッション値", 7.0, 12.0, 9.5)
+            with col_cfg2: current_cush = st.slider("想定クッション値", 7.0, 12.0, 9.5)
             if st.button("🏁 統合スコア算出"):
                 results = []
                 for h in selected:
@@ -240,8 +235,7 @@ with tab6:
         if st.button("💾 修正を保存する"):
             save_df = edited_df.copy()
             save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
-            conn.update(data=save_df)
-            st.success("データベースを更新しました。"); st.rerun()
+            time.sleep(0.5); conn.update(data=save_df); st.success("データベースを更新しました。"); st.rerun()
 
         st.divider()
         st.subheader("❌ 特定データの削除")
@@ -250,12 +244,12 @@ with tab6:
             race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + race_list)
             if del_race != "未選択" and st.button(f"「{del_race}」を削除"):
-                conn.update(data=df[df['last_race'] != del_race]); st.rerun()
+                time.sleep(0.5); conn.update(data=df[df['last_race'] != del_race]); st.rerun()
         with col_d2:
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
-                conn.update(data=df[df['name'] != del_horse]); st.rerun()
+                time.sleep(0.5); conn.update(data=df[df['name'] != del_horse]); st.rerun()
         if st.button("💣 全データ初期化", disabled=not st.checkbox("本当に全消去する")):
-            conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
+            time.sleep(0.5); conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
             st.rerun()
