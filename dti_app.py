@@ -14,8 +14,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_db_data():
     all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
     try:
-        # ttl=0で最新を取得するように設定
-        df = conn.read(ttl="0")
+        # ttl=0 でキャッシュを無効化して読み込む
+        df = conn.read(ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
         for col in all_cols:
@@ -154,8 +154,13 @@ with tab1:
                 })
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
-                time.sleep(1)
-                conn.update(data=updated_df); st.success(f"✅ 解析完了"); st.rerun()
+                with st.spinner("DB保存中..."):
+                    time.sleep(1.0)
+                    conn.update(data=updated_df)
+                    st.cache_data.clear()
+                    time.sleep(1.0)
+                    st.success(f"✅ 解析完了")
+                    st.rerun()
 
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
@@ -172,7 +177,7 @@ with tab2:
                 new_flag = st.text_input("次走への個別の「買い」条件", value=df.at[h_idx, 'next_buy_flag'] if not pd.isna(df.at[h_idx, 'next_buy_flag']) else "")
                 if st.form_submit_button("設定を保存"):
                     df.at[h_idx, 'memo'], df.at[h_idx, 'next_buy_flag'] = new_memo, new_flag
-                    time.sleep(0.5); conn.update(data=df); st.success("更新完了"); st.rerun()
+                    time.sleep(1.0); conn.update(data=df); st.cache_data.clear(); st.success("更新完了"); st.rerun()
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
         display_df = display_df.copy()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
@@ -194,7 +199,7 @@ with tab3:
                 if st.form_submit_button("結果を保存"):
                     for i, row in race_df.iterrows():
                         df.at[i, 'result_pos'], df.at[i, 'result_pop'] = row['result_pos'], row['result_pop']
-                    time.sleep(0.5); conn.update(data=df); st.success("保存完了"); st.rerun()
+                    time.sleep(1.0); conn.update(data=df); st.cache_data.clear(); st.success("保存完了"); st.rerun()
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
             st.dataframe(display_race_df[["name", "notes", "base_rtc", "f3f", "l3f", "result_pos", "result_pop"]])
@@ -261,14 +266,16 @@ with tab6:
                     else:
                         save_df.at[i, 'memo'] = "【修正解析】" + new_tag
             
-            # 書き込み制限回避と確実に反映させるためのフロー
-            with st.spinner("データベースを更新中..."):
-                conn.update(data=save_df)
-                time.sleep(1.5) # 書き込み完了を待つ
-                st.cache_data.clear() # キャッシュを完全にクリア
-                st.success("修正を保存しました。")
-                time.sleep(0.5)
-                st.rerun() # アプリを再起動させて最新状態を表示
+            with st.spinner("DB保存中..."):
+                try:
+                    time.sleep(1.0)
+                    conn.update(data=save_df)
+                    st.cache_data.clear()
+                    time.sleep(1.5)
+                    st.success("修正完了")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"保存エラー: {e}。数秒待って再試行してください。")
 
         st.divider()
         st.subheader("❌ 特定データの削除")
@@ -277,9 +284,12 @@ with tab6:
             race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + race_list)
             if del_race != "未選択" and st.button(f"「{del_race}」を削除"):
-                time.sleep(0.5); conn.update(data=df[df['last_race'] != del_race]); st.rerun()
+                time.sleep(1.0); conn.update(data=df[df['last_race'] != del_race]); st.cache_data.clear(); st.rerun()
         with col_d2:
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
-                time.sleep(0.5); conn.update(data=df[df['name'] != del_horse]); st.rerun()
+                time.sleep(1.0); conn.update(data=df[df['name'] != del_horse]); st.cache_data.clear(); st.rerun()
+        if st.button("💣 全データ初期化", disabled=not st.checkbox("本当に全消去する")):
+            time.sleep(1.0); conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
+            st.cache_data.clear(); st.rerun()
