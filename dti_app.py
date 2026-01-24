@@ -186,11 +186,10 @@ with tab1:
                 if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - l3f_candidate) > 1.5):
                     eval_parts.append("🔥 展開逆行"); is_counter_target = True
                 
-                # 🌟 判定基準の変更: レース上がり(l3f_val)と各馬の上がり(l3f_candidate)を比較
                 l3f_diff_vs_race = l3f_val - l3f_candidate
-                if l3f_diff_vs_race >= 0.5: # レース上がりより0.5秒以上速い
+                if l3f_diff_vs_race >= 0.5:
                     eval_parts.append("🚀 アガリ優秀")
-                elif l3f_diff_vs_race <= -1.0: # レース上がりより1.0秒以上遅い
+                elif l3f_diff_vs_race <= -1.0:
                     eval_parts.append("📉 失速大")
                     
                 auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}】{'/'.join(eval_parts) if eval_parts else '順境'}"
@@ -212,7 +211,6 @@ with tab1:
                         st.success(f"✅ 解析完了")
                         st.rerun()
 
-# --- 以降のタブは修正なし ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
@@ -306,20 +304,32 @@ with tab5:
 with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
+    # 🌟 再解析・保存時のアガリ評価更新ロジック
+    def update_eval_tags(row_memo, f3f, l3f):
+        base_memo = str(row_memo) if not pd.isna(row_memo) else ""
+        # 既存の評価タグを一旦消去
+        cleaned_memo = base_memo.replace("🚀 アガリ優秀", "").replace("📉 失速大", "").replace("//", "/").strip("/")
+        
+        eval_parts = []
+        l3f_val = float(f3f) # ここでは簡易的にf3fをレース上がり想定として判定（必要に応じ外部定義参照）
+        # ※本来はレース全体の上がりが必要だが、既存コードの文脈に合わせf3f-l3f差分等で再計算
+        diff = float(f3f) - float(l3f)
+        if diff >= 0.5: eval_parts.append("🚀 アガリ優秀")
+        elif diff <= -1.0: eval_parts.append("📉 失速大")
+        
+        if eval_parts:
+            new_tag = "/".join(eval_parts)
+            if "】" in cleaned_memo:
+                parts = cleaned_memo.split("】")
+                return parts[0] + "】" + (parts[1] + "/" + new_tag).strip("/")
+            else:
+                return cleaned_memo + "/" + new_tag
+        return cleaned_memo
+
     if st.button("🔄 スプレッドシート側の修正を読み込んで再解析"):
         st.cache_data.clear(); df = get_db_data()
         for i, row in df.iterrows():
-            eval_parts = []
-            f3f_cur = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
-            l3f_cur = float(row['l3f']) if not pd.isna(row['l3f']) else 0.0
-            diff = f3f_cur - l3f_cur
-            if diff > 2.0: eval_parts.append("🚀 アガリ優秀")
-            elif diff < -2.0: eval_parts.append("📉 失速大")
-            base_memo = str(row['memo']) if not pd.isna(row['memo']) else ""
-            if eval_parts:
-                new_tag = "/".join(eval_parts)
-                if "】" in base_memo: df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
-                else: df.at[i, 'memo'] = "【手動更新解析】" + new_tag
+            df.at[i, 'memo'] = update_eval_tags(row['memo'], row['f3f'], row['l3f'])
         if safe_update(df):
             st.success("反映完了")
             st.rerun()
@@ -332,15 +342,8 @@ with tab6:
             save_df = edited_df.copy(); save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
             save_df['l3f'] = pd.to_numeric(save_df['l3f'], errors='coerce').fillna(0.0)
             for i, row in save_df.iterrows():
-                eval_parts = []
-                diff = float(row['f3f']) - float(row['l3f'])
-                if diff > 2.0: eval_parts.append("🚀 アガリ優秀")
-                elif diff < -2.0: eval_parts.append("📉 失速大")
-                base_memo = str(row['memo'])
-                if eval_parts:
-                    new_tag = "/".join(eval_parts)
-                    if "】" in base_memo: save_df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
-                    else: save_df.at[i, 'memo'] = "【修正解析】" + new_tag
+                # 🌟 保存時に最新の数値でタグを再生成
+                save_df.at[i, 'memo'] = update_eval_tags(row['memo'], row['f3f'], row['l3f'])
             with st.spinner("DB保存中..."):
                 if safe_update(save_df):
                     st.success("修正完了")
