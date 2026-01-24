@@ -25,6 +25,9 @@ def get_db_data_cached():
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
         df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
         df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
+        # 🌟 データ型を数値に安全に変換
+        for c in ['f3f', 'l3f', 'race_l3f', 'load']:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
         df = df.dropna(how='all')
         return df
     except:
@@ -280,21 +283,24 @@ with tab6:
         memo = str(row['memo']) if not pd.isna(row['memo']) else ""
         buy_flag = str(row['next_buy_flag']) if not pd.isna(row['next_buy_flag']) else ""
         
-        # 既存タグを一旦除去
         tags = ["🚀 アガリ優秀", "📉 失速大", "🔥 展開逆行", "💎 ﾊﾞｲｱｽ逆行"]
         for t in tags: memo = memo.replace(t, "")
         memo = memo.replace("//", "/").strip("/")
-        
-        # next_buy_flag から「★逆行狙い」を除去（個別のメモは残す）
         buy_flag = buy_flag.replace("★逆行狙い", "").strip()
 
-        f3f = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
-        l3f = float(row['l3f']) if not pd.isna(row['l3f']) else 0.0
-        r_l3f = float(row['race_l3f']) if not pd.isna(row['race_l3f']) else 0.0
-        res_pos = float(row['result_pos']) if not pd.isna(row['result_pos']) else 99.0
-        load_pos = float(row['load']) if not pd.isna(row['load']) else 7.0
+        # 🌟 ここを安全な型変換に修正 (errors='coerce' 的な処理を手動で行う)
+        def to_f(val):
+            try: return float(val) if not pd.isna(val) else 0.0
+            except: return 0.0
+
+        f3f = to_f(row['f3f'])
+        l3f = to_f(row['l3f'])
+        r_l3f = to_f(row['race_l3f'])
+        res_pos = to_f(row['result_pos'])
+        if res_pos == 0: res_pos = 99.0 # 未入力対応
+        load_pos = to_f(row['load'])
+        if load_pos == 0: load_pos = 7.0
         
-        # 🌟 メモの【】内から最新のペース・バイアス情報を読み取る
         p_status = "ミドルペース"; b_type = "フラット"
         if "【" in memo and "】" in memo:
             header = memo.split("】")[0]
@@ -315,10 +321,7 @@ with tab6:
             if (p_status == "ハイペース" and load_pos <= 3.0) or (p_status == "スローペース" and load_pos >= 10.0 and (f3f - l3f) > 1.5):
                 new_tags.append("🔥 展開逆行"); is_counter = True
 
-        # next_buy_flag の更新
         updated_buy_flag = ("★逆行狙い " + buy_flag).strip() if is_counter else buy_flag
-
-        # メモの再構築
         if "】" in memo:
             parts = memo.split("】")
             updated_memo = (parts[0] + "】" + "/".join(new_tags)).strip("/")
