@@ -275,22 +275,25 @@ with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
 
-    # 🌟 評価タグの再判定・更新ロジック (逆行系もカバー)
+    # 🌟 評価タグおよび next_buy_flag の再判定・更新ロジック
     def update_eval_tags_full(row):
         memo = str(row['memo']) if not pd.isna(row['memo']) else ""
-        # 既存タグを一旦すべて除去
+        buy_flag = str(row['next_buy_flag']) if not pd.isna(row['next_buy_flag']) else ""
+        
+        # 既存タグを一旦除去
         tags = ["🚀 アガリ優秀", "📉 失速大", "🔥 展開逆行", "💎 ﾊﾞｲｱｽ逆行"]
         for t in tags: memo = memo.replace(t, "")
         memo = memo.replace("//", "/").strip("/")
         
-        # 基礎データ抽出
+        # next_buy_flag から「★逆行狙い」を除去（個別のメモは残す）
+        buy_flag = buy_flag.replace("★逆行狙い", "").strip()
+
         f3f = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
         l3f = float(row['l3f']) if not pd.isna(row['l3f']) else 0.0
         r_l3f = float(row['race_l3f']) if not pd.isna(row['race_l3f']) else 0.0
         res_pos = float(row['result_pos']) if not pd.isna(row['result_pos']) else 99.0
         load_pos = float(row['load']) if not pd.isna(row['load']) else 7.0
         
-        # ペース・バイアス判定 (メモの先頭【】内から抽出を試みる)
         p_status = "ミドルペース"; b_type = "フラット"
         if "【" in memo and "】" in memo:
             header = memo.split("】")[0]
@@ -299,31 +302,38 @@ with tab6:
             if "前有利" in header: b_type = "前有利"
             elif "後有利" in header: b_type = "後有利"
 
-        new_tags = []
-        # 1. アガリ評価
+        new_tags = []; is_counter = False
         if r_l3f > 0:
             diff = r_l3f - l3f
             if diff >= 0.5: new_tags.append("🚀 アガリ優秀")
             elif diff <= -1.0: new_tags.append("📉 失速大")
         
-        # 2. 逆行評価 (5着以内が条件)
         if res_pos <= 5:
-            # バイアス逆行
             if (b_type == "前有利" and load_pos >= 10.0) or (b_type == "後有利" and load_pos <= 3.0):
-                new_tags.append("💎 ﾊﾞｲｱｽ逆行")
-            # ペース逆行
+                new_tags.append("💎 ﾊﾞｲｱｽ逆行"); is_counter = True
             if (p_status == "ハイペース" and load_pos <= 3.0) or (p_status == "スローペース" and load_pos >= 10.0 and (f3f - l3f) > 1.5):
-                new_tags.append("🔥 展開逆行")
+                new_tags.append("🔥 展開逆行"); is_counter = True
+
+        # next_buy_flag の更新
+        if is_counter:
+            updated_buy_flag = ("★逆行狙い " + buy_flag).strip()
+        else:
+            updated_buy_flag = buy_flag
 
         # メモの再構築
         if "】" in memo:
             parts = memo.split("】")
-            return (parts[0] + "】" + "/".join(new_tags)).strip("/")
-        return "/".join(new_tags) if new_tags else "順境"
+            updated_memo = (parts[0] + "】" + "/".join(new_tags)).strip("/")
+        else:
+            updated_memo = "/".join(new_tags) if new_tags else "順境"
+            
+        return updated_memo, updated_buy_flag
 
     if st.button("🔄 スプレッドシート側の修正を読み込んで再解析"):
         st.cache_data.clear(); df = get_db_data()
-        for i, row in df.iterrows(): df.at[i, 'memo'] = update_eval_tags_full(row)
+        for i, row in df.iterrows():
+            m, f = update_eval_tags_full(row)
+            df.at[i, 'memo'], df.at[i, 'next_buy_flag'] = m, f
         if safe_update(df): st.success("反映完了"); st.rerun()
 
     if not df.empty:
@@ -332,7 +342,9 @@ with tab6:
         edited_df = st.data_editor(edit_display_df.sort_values("date", ascending=False), num_rows="dynamic")
         if st.button("💾 修正を保存する"):
             save_df = edited_df.copy(); save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
-            for i, row in save_df.iterrows(): save_df.at[i, 'memo'] = update_eval_tags_full(row)
+            for i, row in save_df.iterrows():
+                m, f = update_eval_tags_full(row)
+                save_df.at[i, 'memo'], save_df.at[i, 'next_buy_flag'] = m, f
             if safe_update(save_df): st.success("修正完了"); st.rerun()
         
         st.divider()
