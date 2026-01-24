@@ -43,7 +43,7 @@ def safe_update(df):
             return True
         except Exception as e:
             if i < max_retries - 1:
-                time.sleep(5)  # 429エラー時は5秒待機
+                time.sleep(5)
                 continue
             else:
                 st.error(f"Google Sheetsの更新に失敗しました: {e}")
@@ -134,14 +134,21 @@ with tab1:
             for line in lines:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
-                res_pos_match = re.match(r'^(\d{1,2})', line); res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
                 
-                # 🌟 通過順位解析の改善 (スペース区切り等に対応)
-                pos_list = re.findall(r'(?<![:\.])\b([1-2]?\d)\b(?![:\.])', line)
-                four_c_pos = 5.0
-                if len(pos_list) >= 2:
-                    valid_positions = [float(p) for p in pos_list if 1 <= int(p) <= 20]
-                    if len(valid_positions) >= 1:
+                time_end_pos = time_match.end()
+                res_pos_match = re.match(r'^(\d{1,2})', line)
+                res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
+                
+                after_time_str = line[time_end_pos:]
+                pos_list = re.findall(r'\b([1-2]?\d)\b', after_time_str)
+                
+                four_c_pos = 7.0 
+                if pos_list:
+                    valid_positions = []
+                    for p in pos_list:
+                        if int(p) > 30 and len(valid_positions) > 0: break
+                        valid_positions.append(float(p))
+                    if valid_positions:
                         four_c_pos = valid_positions[-1]
                 
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
@@ -154,7 +161,10 @@ with tab1:
                 line = entry["line"]; last_pos = entry["four_c_pos"]; result_pos = entry["res_pos"]
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':')); indiv_time = m_p * 60 + s_p
+                
+                # 斤量抽出
                 weight_match = re.search(r'\s([4-6]\d\.\d)\s', line); weight = float(weight_match.group(1)) if weight_match else 0.0
+                
                 l3f_candidate = 0.0; l3f_match = re.search(r'(\d{2}\.\d)\s*\d{3}\(', line)
                 if l3f_match: l3f_candidate = float(l3f_match.group(1))
                 else:
@@ -186,7 +196,8 @@ with tab1:
                 rtc = (indiv_time - weight_adj - actual_time_adj - load_time_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
                 new_rows.append({
-                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg / 4角:{int(last_pos)}",
+                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, 
+                    "notes": f"{weight}kg", # 🌟 斤量のみに修正
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "★逆行狙い" if is_counter_target else "", "result_pos": result_pos
                 })
@@ -197,6 +208,7 @@ with tab1:
                         st.success(f"✅ 解析完了")
                         st.rerun()
 
+# --- Tab2 以降（既存通り） ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
