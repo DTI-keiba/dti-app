@@ -16,10 +16,12 @@ def get_db_data():
         df = conn.read(ttl="0")
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
+        # 欠損列の補完
         for col in all_cols:
             if col not in df.columns:
                 df[col] = None
-        df['date'] = pd.to_datetime(df['date'])
+        # 型変換
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
         df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
         df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
         df = df.dropna(how='all')
@@ -28,7 +30,7 @@ def get_db_data():
         return pd.DataFrame(columns=all_cols)
 
 def format_time(seconds):
-    if seconds is None or seconds <= 0: return ""
+    if seconds is None or seconds <= 0 or pd.isna(seconds): return ""
     m = int(seconds // 60)
     s = seconds % 60
     return f"{m}:{s:04.1f}"
@@ -77,7 +79,6 @@ with tab1:
     if st.button("🚀 解析してDBへ保存"):
         if raw_input and f3f_val > 0:
             lines = [l.strip() for l in raw_input.split('\n') if len(l.strip()) > 20]
-            
             parsed_data = []
             for line in lines:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
@@ -99,16 +100,12 @@ with tab1:
                 time_str = time_match.group(1); m_p, s_p = map(float, time_str.split(':'))
                 indiv_time = m_p * 60 + s_p
                 
-                # --- 上がり3F抽出の徹底改善 ---
+                # 上がり3Fの抽出ロジック（改善版）
                 weight_match = re.search(r'\s([4-6]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 0.0
-                
-                # 小数点第一位を持つ全ての数値を抽出（斤量や上がりタイム等）
                 all_decimals = re.findall(r'(\d{2}\.\d)', line)
                 indiv_l3f = l3f_val
-                
-                # 30.0〜46.0の範囲にあり、かつ斤量(weight)と一致しないものを上がり3Fとする
-                # 逆順(後ろから)探すことで、より上がりタイム列の可能性を高める
+                # 逆順で最初に見つかった「斤量でない30~46の数値」を上がり3Fとする
                 for val_str in reversed(all_decimals):
                     f_val = float(val_str)
                     if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.1:
@@ -128,17 +125,10 @@ with tab1:
                 eval_parts = []
                 is_counter_target = False
                 if result_pos <= 5:
-                    if bias_type == "前有利" and last_pos >= 10.0:
+                    if (bias_type == "前有利" and last_pos >= 10.0) or (bias_type == "後有利" and last_pos <= 3.0):
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行")
                         is_counter_target = True
-                    elif bias_type == "後有利" and last_pos <= 3.0:
-                        eval_parts.append("💎 ﾊﾞｲｱｽ逆行")
-                        is_counter_target = True
-                
-                if pace_status == "ハイペース" and last_pos <= 3.0:
-                    eval_parts.append("🔥 展開逆行")
-                    is_counter_target = True
-                elif pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - indiv_l3f) > 1.5:
+                if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - indiv_l3f) > 1.5):
                     eval_parts.append("🔥 展開逆行")
                     is_counter_target = True
                 
@@ -146,9 +136,7 @@ with tab1:
                 if l3f_diff > 2.0: eval_parts.append("🚀 アガリ優秀")
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 
-                load_desc = f"負荷:{load_score:.1f}"
-                auto_comment = f"【{pace_status}/{bias_type}/{load_desc}】{'/'.join(eval_parts) if eval_parts else '順境'}"
-                
+                auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 weight_adj = (weight - 56.0) * 0.1
                 rtc = (indiv_time - weight_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
@@ -159,7 +147,7 @@ with tab1:
                 })
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
-                conn.update(data=updated_df); st.success(f"✅ 解析完了 (傾向: {bias_type})")
+                conn.update(data=updated_df); st.success(f"✅ 解析完了"); st.rerun()
 
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
@@ -171,54 +159,16 @@ with tab2:
         with col_s2: target_h = st.selectbox("条件を編集する馬を選択", ["未選択"] + unique_horses)
         if target_h != "未選択":
             h_idx = df[df['name'] == target_h].index[-1]
-            current_memo = df.at[h_idx, 'memo'] if not pd.isna(df.at[h_idx, 'memo']) else ""
-            current_flag = df.at[h_idx, 'next_buy_flag'] if not pd.isna(df.at[h_idx, 'next_buy_flag']) else ""
             with st.form("edit_horse_form"):
-                st.write(f"🐎 {target_h} の個別設定")
-                new_memo = st.text_area("メモ・評価", value=current_memo)
-                new_flag = st.text_input("次走への個別の「買い」条件", value=current_flag)
+                new_memo = st.text_area("メモ・評価", value=df.at[h_idx, 'memo'] if not pd.isna(df.at[h_idx, 'memo']) else "")
+                new_flag = st.text_input("次走への個別の「買い」条件", value=df.at[h_idx, 'next_buy_flag'] if not pd.isna(df.at[h_idx, 'next_buy_flag']) else "")
                 if st.form_submit_button("設定を保存"):
-                    df.at[h_idx, 'memo'] = new_memo
-                    df.at[h_idx, 'next_buy_flag'] = new_flag
-                    conn.update(data=df); st.success(f"{target_h} 更新完了"); st.rerun()
+                    df.at[h_idx, 'memo'], df.at[h_idx, 'next_buy_flag'] = new_memo, new_flag
+                    conn.update(data=df); st.success("更新完了"); st.rerun()
         display_df = df[df['name'].str.contains(search_h, na=False)] if search_h else df
         display_df = display_df.copy()
         display_df['base_rtc'] = display_df['base_rtc'].apply(format_time)
         st.dataframe(display_df.sort_values("date", ascending=False)[["date", "name", "last_race", "base_rtc", "f3f", "l3f", "load", "memo", "next_buy_flag"]], use_container_width=True)
-
-with tab4:
-    st.header("🎯 シミュレーター & 統合評価")
-    df = get_db_data()
-    if not df.empty:
-        selected = st.multiselect("出走予定馬を選択", sorted(list(df['name'].dropna().unique())))
-        if selected:
-            col_cfg1, col_cfg2 = st.columns(2)
-            with col_cfg1:
-                target_c = st.selectbox("次走の競馬場", list(COURSE_DATA.keys()), key="sim_c")
-                target_dist = st.selectbox("次走の距離 (m)", list(range(1000, 3700, 100)), index=6, key="sim_dist")
-            with col_cfg2:
-                current_cush = st.slider("想定クッション値", 7.0, 12.0, 9.5)
-            if st.button("🏁 統合スコア算出"):
-                results = []
-                for h in selected:
-                    h_history = df[df['name'] == h].sort_values("date")
-                    h_latest = h_history.iloc[-1]
-                    best_past = h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]
-                    b_match = 1 if abs(best_past['cushion'] - current_cush) <= 0.5 else 0
-                    interval = (datetime.now() - h_latest['date']).days // 7
-                    rota_score = 1 if 4 <= interval <= 9 else 0
-                    counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
-                    sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
-                    total_score = b_match + rota_score + counter_score + (1 if h_latest['next_buy_flag'] and "★" not in h_latest['next_buy_flag'] else 0)
-                    grade = "S" if total_score >= 2 else "A" if total_score == 1 else "B"
-                    results.append({
-                        "評価": grade, "馬名": h, "想定タイム": format_time(sim_rtc), 
-                        "前3F": h_latest['f3f'], "後3F": h_latest['l3f'],
-                        "馬場": "🔥" if b_match else "-", "解析メモ": h_latest['memo'], 
-                        "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc
-                    })
-                res_df = pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])
-                st.table(res_df[["評価", "馬名", "想定タイム", "前3F", "後3F", "馬場", "解析メモ", "買いフラグ"]])
 
 with tab3:
     st.header("🏁 答え合わせ & レース別履歴")
@@ -231,24 +181,46 @@ with tab3:
             with st.form("result_form"):
                 for i, row in race_df.iterrows():
                     col_r1, col_r2 = st.columns(2)
-                    val_pos = int(row['result_pos']) if not pd.isna(row['result_pos']) else 0
-                    val_pop = int(row['result_pop']) if not pd.isna(row['result_pop']) else 0
-                    with col_r1: race_df.at[i, 'result_pos'] = st.number_input(f"{row['name']} 着順", 0, 18, value=val_pos, key=f"pos_{i}")
-                    with col_r2: race_df.at[i, 'result_pop'] = st.number_input(f"{row['name']} 人気", 0, 18, value=val_pop, key=f"pop_{i}")
+                    with col_r1: race_df.at[i, 'result_pos'] = st.number_input(f"{row['name']} 着順", 0, 18, value=int(row['result_pos']) if not pd.isna(row['result_pos']) else 0, key=f"pos_{i}")
+                    with col_r2: race_df.at[i, 'result_pop'] = st.number_input(f"{row['name']} 人気", 0, 18, value=int(row['result_pop']) if not pd.isna(row['result_pop']) else 0, key=f"pop_{i}")
                 if st.form_submit_button("結果を保存"):
                     for i, row in race_df.iterrows():
-                        df.at[i, 'result_pos'] = row['result_pos']
-                        df.at[i, 'result_pop'] = row['result_pop']
-                    conn.update(data=df); st.success("保存完了")
+                        df.at[i, 'result_pos'], df.at[i, 'result_pop'] = row['result_pos'], row['result_pop']
+                    conn.update(data=df); st.success("保存完了"); st.rerun()
             display_race_df = race_df.copy()
             display_race_df['base_rtc'] = display_race_df['base_rtc'].apply(format_time)
             st.dataframe(display_race_df[["name", "notes", "base_rtc", "f3f", "l3f", "result_pos", "result_pop"]])
 
+with tab4:
+    st.header("🎯 シミュレーター & 統合評価")
+    df = get_db_data()
+    if not df.empty:
+        selected = st.multiselect("出走予定馬を選択", sorted(list(df['name'].dropna().unique())))
+        if selected:
+            col_cfg1, col_cfg2 = st.columns(2)
+            with col_cfg1:
+                target_c, target_dist = st.selectbox("次走の競馬場", list(COURSE_DATA.keys())), st.selectbox("次走の距離 (m)", list(range(1000, 3700, 100)), index=6)
+            with col_cfg2:
+                current_cush = st.slider("想定クッション値", 7.0, 12.0, 9.5)
+            if st.button("🏁 統合スコア算出"):
+                results = []
+                for h in selected:
+                    h_history = df[df['name'] == h].sort_values("date")
+                    h_latest = h_history.iloc[-1]
+                    b_match = 1 if abs(h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]['cushion'] - current_cush) <= 0.5 else 0
+                    interval = (datetime.now() - h_latest['date']).days // 7
+                    rota_score = 1 if 4 <= interval <= 9 else 0
+                    counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
+                    sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
+                    total_score = b_match + rota_score + counter_score + (1 if h_latest['next_buy_flag'] and "★" not in h_latest['next_buy_flag'] else 0)
+                    results.append({"評価": "S" if total_score >= 2 else "A" if total_score == 1 else "B", "馬名": h, "想定タイム": format_time(sim_rtc), "前3F": h_latest['f3f'], "後3F": h_latest['l3f'], "馬場": "🔥" if b_match else "-", "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc})
+                st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム", "前3F", "後3F", "馬場", "解析メモ", "買いフラグ"]])
+
 with tab5:
     st.header("📈 トレンド")
     df = get_db_data()
-    if not df.empty and 'cushion' in df.columns:
-        target_c = st.selectbox("競馬場", list(COURSE_DATA.keys()))
+    if not df.empty:
+        target_c = st.selectbox("競馬場", list(COURSE_DATA.keys()), key="trend_c")
         trend_df = df[df['course'] == target_c].sort_values("date")
         if not trend_df.empty: st.line_chart(trend_df.set_index("date")[["cushion", "water"]])
 
@@ -256,24 +228,16 @@ with tab6:
     st.header("🗑 データベース管理")
     df = get_db_data()
     if not df.empty:
-        st.subheader("🛠 特定データの削除")
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + sorted(list(df['last_race'].unique())))
-            if del_race != "未選択" and st.button(f"「{del_race}」をDBから削除"):
-                conn.update(data=df[df['last_race'] != del_race]); st.success(f"{del_race} を削除しました"); st.rerun()
+            if del_race != "未選択" and st.button(f"「{del_race}」を削除"):
+                conn.update(data=df[df['last_race'] != del_race]); st.rerun()
         with col_d2:
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + sorted(list(df['name'].unique())))
-            if del_horse != "未選択" and st.button(f"「{del_horse}」の全履歴を削除"):
-                conn.update(data=df[df['name'] != del_horse]); st.success(f"{del_horse} を削除しました"); st.rerun()
-        st.divider()
-        st.subheader("📁 保存済み全データ")
-        view_df = df.copy()
-        view_df['base_rtc'] = view_df['base_rtc'].apply(format_time)
-        st.dataframe(view_df.sort_values("date", ascending=False), use_container_width=True)
-        st.divider()
-        st.subheader("💣 データベースの初期化")
-        if st.button("全データを一括削除する", disabled=not st.checkbox("全消去を実行する")):
+            if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
+                conn.update(data=df[df['name'] != del_horse]); st.rerun()
+        st.dataframe(df.sort_values("date", ascending=False), use_container_width=True)
+        if st.button("全データ初期化", disabled=not st.checkbox("本当に全消去する")):
             conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
-            st.success("全てのデータを削除しました。"); st.rerun()
-    else: st.info("現在、データベースに保存されているデータはありません。")
+            st.rerun()
