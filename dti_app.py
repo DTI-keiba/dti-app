@@ -240,7 +240,6 @@ with tab3:
             race_df = df[df['last_race'] == sel_race].copy()
             with st.form("result_form"):
                 for i, row in race_df.iterrows():
-                    # 🌟 エラー修正箇所: number_inputのmax_valueを100に拡大し、初期値が範囲外にならないよう最小化処理を追加
                     val_pos = int(row['result_pos']) if not pd.isna(row['result_pos']) else 0
                     val_pop = int(row['result_pop']) if not pd.isna(row['result_pop']) else 0
                     
@@ -279,7 +278,16 @@ with tab4:
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
-                    sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
+                    
+                    # 🌟 初距離（前走と異なる距離）の場合のタイム推定ロジック
+                    prev_dist = h_latest['dist']
+                    if prev_dist and prev_dist > 0 and prev_dist != target_dist:
+                        # 1mあたりの平均タイムを算出して次走距離に換算
+                        avg_time_per_meter = h_latest['base_rtc'] / prev_dist
+                        sim_rtc = (avg_time_per_meter * target_dist) + (COURSE_DATA[target_c] * (target_dist/1600.0))
+                    else:
+                        sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
+                        
                     results.append({"評価": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B", "馬名": h, "想定タイム": format_time(sim_rtc), "前3F": h_latest['f3f'], "後3F": h_latest['l3f'], "馬場": "🔥" if b_match else "-", "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc})
                 st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム", "前3F", "後3F", "馬場", "解析メモ", "買いフラグ"]])
 
