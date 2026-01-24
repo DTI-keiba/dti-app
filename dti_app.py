@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
-import time # 追加
+import time
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
@@ -14,6 +14,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_db_data():
     all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
     try:
+        # ttl=0で最新を取得するように設定
         df = conn.read(ttl="0")
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
@@ -42,7 +43,10 @@ def parse_time_str(time_str):
             return m * 60 + s
         return float(time_str)
     except:
-        return 0.0
+        try:
+            return float(time_str)
+        except:
+            return 0.0
 
 COURSE_DATA = {
     "東京": 0.10, "中山": 0.25, "京都": 0.15, "阪神": 0.18, "中京": 0.20,
@@ -110,17 +114,20 @@ with tab1:
                 indiv_time = m_p * 60 + s_p
                 weight_match = re.search(r'\s([4-6]\d\.\d)\s', line)
                 weight = float(weight_match.group(1)) if weight_match else 0.0
+                
                 l3f_candidate = 0.0
-                search_after_pos = re.split(r'\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}[\s-]\d{1,2}', line)
-                if len(search_after_pos) > 1:
-                    post_text = search_after_pos[-1]
-                    decimal_finds = re.findall(r'(\d{2}\.\d)', post_text)
+                l3f_match = re.search(r'(\d{2}\.\d)\s*\d{3}\(', line)
+                if l3f_match:
+                    l3f_candidate = float(l3f_match.group(1))
+                else:
+                    decimal_finds = re.findall(r'(\d{2}\.\d)', line)
                     for d_val in decimal_finds:
                         f_val = float(d_val)
-                        if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.1:
+                        if 30.0 <= f_val <= 46.0 and abs(f_val - weight) > 0.5:
                             l3f_candidate = f_val
                             break
                 if l3f_candidate == 0.0: l3f_candidate = l3f_val 
+                
                 name = "不明"
                 parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
@@ -147,7 +154,7 @@ with tab1:
                 })
             if new_rows:
                 existing_df = get_db_data(); updated_df = pd.concat([existing_df, pd.DataFrame(new_rows)], ignore_index=True)
-                time.sleep(1) # API制限回避用
+                time.sleep(1)
                 conn.update(data=updated_df); st.success(f"✅ 解析完了"); st.rerun()
 
 with tab2:
@@ -230,12 +237,38 @@ with tab6:
         st.subheader("🛠️ データの手動修正")
         edit_display_df = df.copy()
         edit_display_df['base_rtc'] = edit_display_df['base_rtc'].apply(format_time)
-        st.info("base_rtcは '1:59.3' の形式で修正可能です。")
+        st.info("base_rtcは '1:59.3' の形式、l3fは '33.8' の形式で修正可能です。")
         edited_df = st.data_editor(edit_display_df.sort_values("date", ascending=False), num_rows="dynamic", key="data_editor_main")
+        
         if st.button("💾 修正を保存する"):
             save_df = edited_df.copy()
             save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
-            time.sleep(0.5); conn.update(data=save_df); st.success("データベースを更新しました。"); st.rerun()
+            save_df['l3f'] = pd.to_numeric(save_df['l3f'], errors='coerce').fillna(0.0)
+            
+            # 再解析ロジック
+            for i, row in save_df.iterrows():
+                eval_parts = []
+                f3f_cur = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
+                l3f_cur = float(row['l3f']) if not pd.isna(row['l3f']) else 0.0
+                diff = f3f_cur - l3f_cur
+                if diff > 2.0: eval_parts.append("🚀 アガリ優秀")
+                elif diff < -2.0: eval_parts.append("📉 失速大")
+                base_memo = str(row['memo']) if not pd.isna(row['memo']) else ""
+                if eval_parts:
+                    new_tag = "/".join(eval_parts)
+                    if "】" in base_memo:
+                        save_df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
+                    else:
+                        save_df.at[i, 'memo'] = "【修正解析】" + new_tag
+            
+            # 書き込み制限回避と確実に反映させるためのフロー
+            with st.spinner("データベースを更新中..."):
+                conn.update(data=save_df)
+                time.sleep(1.5) # 書き込み完了を待つ
+                st.cache_data.clear() # キャッシュを完全にクリア
+                st.success("修正を保存しました。")
+                time.sleep(0.5)
+                st.rerun() # アプリを再起動させて最新状態を表示
 
         st.divider()
         st.subheader("❌ 特定データの削除")
@@ -250,6 +283,3 @@ with tab6:
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
                 time.sleep(0.5); conn.update(data=df[df['name'] != del_horse]); st.rerun()
-        if st.button("💣 全データ初期化", disabled=not st.checkbox("本当に全消去する")):
-            time.sleep(0.5); conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
-            st.rerun()
