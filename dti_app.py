@@ -11,13 +11,12 @@ st.set_page_config(page_title="DTI Ultimate DB", layout="wide")
 # --- Google Sheets 接続 ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 🌟 API制限(429 Error)回避のため、キャッシュにTTL(有効期限)を設定
-# ttl=300 により、5分間はAPIを叩かずキャッシュから読み込みます
+# 🌟 API制限(429 Error)回避のためのキャッシュ設定
 @st.cache_data(ttl=300)
 def get_db_data_cached():
     all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
     try:
-        df = conn.read(ttl=0) # 接続側の内部キャッシュは無効化して最新を狙う
+        df = conn.read(ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
         for col in all_cols:
@@ -31,23 +30,23 @@ def get_db_data_cached():
     except:
         return pd.DataFrame(columns=all_cols)
 
-# 既存の関数名を維持しつつキャッシュ版を呼び出す（他コードへの影響をゼロにするため）
 def get_db_data():
     return get_db_data_cached()
 
+# 🌟 API更新エラー対策のリトライ関数
 def safe_update(df):
     max_retries = 3
     for i in range(max_retries):
         try:
             conn.update(data=df)
-            st.cache_data.clear() # 更新後はキャッシュをクリアして次回最新を取得させる
+            st.cache_data.clear()
             return True
         except Exception as e:
             if i < max_retries - 1:
-                time.sleep(5)  # 429エラー時は少し長めに待機
+                time.sleep(5)  # 429エラー時は5秒待機
                 continue
             else:
-                st.error(f"Google Sheetsの更新に失敗しました。権限設定やAPI制限を確認してください: {e}")
+                st.error(f"Google Sheetsの更新に失敗しました: {e}")
                 return False
 
 def format_time(seconds):
@@ -136,9 +135,17 @@ with tab1:
                 time_match = re.search(r'(\d{1,2}:\d{2}\.\d)', line)
                 if not time_match: continue
                 res_pos_match = re.match(r'^(\d{1,2})', line); res_pos = int(res_pos_match.group(1)) if res_pos_match else 99
-                pos_finds = re.findall(r'(\d{1,2})[\s-](\d{1,2})[\s-](\d{1,2})[\s-](\d{1,2})', line)
-                four_c_pos = float(pos_finds[0][3]) if pos_finds else 5.0
+                
+                # 🌟 通過順位解析の改善 (スペース区切り等に対応)
+                pos_list = re.findall(r'(?<![:\.])\b([1-2]?\d)\b(?![:\.])', line)
+                four_c_pos = 5.0
+                if len(pos_list) >= 2:
+                    valid_positions = [float(p) for p in pos_list if 1 <= int(p) <= 20]
+                    if len(valid_positions) >= 1:
+                        four_c_pos = valid_positions[-1]
+                
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
+            
             top_3_pos = [d["four_c_pos"] for d in parsed_data if d["res_pos"] <= 3]
             avg_top_pos = sum(top_3_pos) / len(top_3_pos) if top_3_pos else 7.0
             bias_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
