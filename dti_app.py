@@ -14,7 +14,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_db_data():
     all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
     try:
-        # ttl=0 でキャッシュを無効化して読み込む
+        # スプレッドシート側の修正を即座に反映させるため ttl=0 を厳守
         df = conn.read(ttl=0)
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
@@ -43,10 +43,8 @@ def parse_time_str(time_str):
             return m * 60 + s
         return float(time_str)
     except:
-        try:
-            return float(time_str)
-        except:
-            return 0.0
+        try: return float(time_str)
+        except: return 0.0
 
 COURSE_DATA = {
     "東京": 0.10, "中山": 0.25, "京都": 0.15, "阪神": 0.18, "中京": 0.20,
@@ -57,6 +55,37 @@ COURSE_DATA = {
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📝 解析・保存", "🐎 馬別履歴", "🏁 レース別履歴", "🎯 シミュレーター", "📈 馬場トレンド", "🗑 データ管理"])
 
 with tab1:
+    # --- 🌟 追加機能: 注目馬ピックアップ ---
+    df_pickup = get_db_data()
+    if not df_pickup.empty:
+        st.subheader("🎯 次走注目馬（逆行評価ピックアップ）")
+        # メモの内容から逆行タイプを判定
+        pickup_rows = []
+        for i, row in df_pickup.iterrows():
+            memo = str(row['memo'])
+            b_flag = "💎" in memo  # バイアス逆行
+            p_flag = "🔥" in memo  # 展開（ペース）逆行
+            
+            if b_flag or p_flag:
+                detail = ""
+                if b_flag and p_flag: detail = "【💥両方逆行】"
+                elif b_flag: detail = "【💎バイアス逆行】"
+                elif p_flag: detail = "【🔥ペース逆行】"
+                
+                pickup_rows.append({
+                    "馬名": row['name'],
+                    "逆行タイプ": detail,
+                    "前走": row['last_race'],
+                    "日付": row['date'].strftime('%Y-%m-%d') if not pd.isna(row['date']) else "",
+                    "解析メモ": memo
+                })
+        
+        if pickup_rows:
+            st.dataframe(pd.DataFrame(pickup_rows).sort_values("日付", ascending=False), use_container_width=True, hide_index=True)
+        else:
+            st.info("現在、逆行フラグの付いた注目馬はいません。")
+    st.divider()
+
     st.header("🚀 レース解析 & 自動保存")
     with st.sidebar:
         r_name = st.text_input("レース名")
@@ -238,19 +267,35 @@ with tab5:
 with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
+    
+    if st.button("🔄 スプレッドシート側の修正を読み込んで再解析"):
+        st.cache_data.clear()
+        df = get_db_data()
+        for i, row in df.iterrows():
+            eval_parts = []
+            f3f_cur = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
+            l3f_cur = float(row['l3f']) if not pd.isna(row['l3f']) else 0.0
+            diff = f3f_cur - l3f_cur
+            if diff > 2.0: eval_parts.append("🚀 アガリ優秀")
+            elif diff < -2.0: eval_parts.append("📉 失速大")
+            base_memo = str(row['memo']) if not pd.isna(row['memo']) else ""
+            if eval_parts:
+                new_tag = "/".join(eval_parts)
+                if "】" in base_memo: df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
+                else: df.at[i, 'memo'] = "【手動更新解析】" + new_tag
+        conn.update(data=df)
+        st.success("スプレッドシートの変更を反映し、再解析を完了しました。")
+        st.rerun()
+
     if not df.empty:
         st.subheader("🛠️ データの手動修正")
         edit_display_df = df.copy()
         edit_display_df['base_rtc'] = edit_display_df['base_rtc'].apply(format_time)
-        st.info("base_rtcは '1:59.3' の形式、l3fは '33.8' の形式で修正可能です。")
         edited_df = st.data_editor(edit_display_df.sort_values("date", ascending=False), num_rows="dynamic", key="data_editor_main")
-        
         if st.button("💾 修正を保存する"):
             save_df = edited_df.copy()
             save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
             save_df['l3f'] = pd.to_numeric(save_df['l3f'], errors='coerce').fillna(0.0)
-            
-            # 再解析ロジック
             for i, row in save_df.iterrows():
                 eval_parts = []
                 f3f_cur = float(row['f3f']) if not pd.isna(row['f3f']) else 0.0
@@ -261,21 +306,12 @@ with tab6:
                 base_memo = str(row['memo']) if not pd.isna(row['memo']) else ""
                 if eval_parts:
                     new_tag = "/".join(eval_parts)
-                    if "】" in base_memo:
-                        save_df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
-                    else:
-                        save_df.at[i, 'memo'] = "【修正解析】" + new_tag
-            
+                    if "】" in base_memo: save_df.at[i, 'memo'] = base_memo.split("】")[0] + "】" + new_tag
+                    else: save_df.at[i, 'memo'] = "【修正解析】" + new_tag
             with st.spinner("DB保存中..."):
                 try:
-                    time.sleep(1.0)
-                    conn.update(data=save_df)
-                    st.cache_data.clear()
-                    time.sleep(1.5)
-                    st.success("修正完了")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"保存エラー: {e}。数秒待って再試行してください。")
+                    time.sleep(1.0); conn.update(data=save_df); st.cache_data.clear(); time.sleep(1.5); st.success("修正完了"); st.rerun()
+                except Exception as e: st.error(f"保存エラー: {e}")
 
         st.divider()
         st.subheader("❌ 特定データの削除")
@@ -290,6 +326,3 @@ with tab6:
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
                 time.sleep(1.0); conn.update(data=df[df['name'] != del_horse]); st.cache_data.clear(); st.rerun()
-        if st.button("💣 全データ初期化", disabled=not st.checkbox("本当に全消去する")):
-            time.sleep(1.0); conn.update(data=pd.DataFrame(columns=["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]))
-            st.cache_data.clear(); st.rerun()
