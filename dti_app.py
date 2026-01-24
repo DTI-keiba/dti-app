@@ -11,10 +11,13 @@ st.set_page_config(page_title="DTI Ultimate DB", layout="wide")
 # --- Google Sheets 接続 ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def get_db_data():
+# 🌟 API制限(429 Error)回避のため、キャッシュにTTL(有効期限)を設定
+# ttl=300 により、5分間はAPIを叩かずキャッシュから読み込みます
+@st.cache_data(ttl=300)
+def get_db_data_cached():
     all_cols = ["name", "base_rtc", "last_race", "course", "dist", "notes", "timestamp", "f3f", "l3f", "load", "memo", "date", "cushion", "water", "result_pos", "result_pop", "next_buy_flag"]
     try:
-        df = conn.read(ttl=0)
+        df = conn.read(ttl=0) # 接続側の内部キャッシュは無効化して最新を狙う
         if df is None or df.empty:
             return pd.DataFrame(columns=all_cols)
         for col in all_cols:
@@ -28,17 +31,20 @@ def get_db_data():
     except:
         return pd.DataFrame(columns=all_cols)
 
-# 🌟 エラー回避のための安全な更新関数
+# 既存の関数名を維持しつつキャッシュ版を呼び出す（他コードへの影響をゼロにするため）
+def get_db_data():
+    return get_db_data_cached()
+
 def safe_update(df):
     max_retries = 3
     for i in range(max_retries):
         try:
             conn.update(data=df)
-            st.cache_data.clear()
+            st.cache_data.clear() # 更新後はキャッシュをクリアして次回最新を取得させる
             return True
         except Exception as e:
             if i < max_retries - 1:
-                time.sleep(2)  # 2秒待機してリトライ
+                time.sleep(5)  # 429エラー時は少し長めに待機
                 continue
             else:
                 st.error(f"Google Sheetsの更新に失敗しました。権限設定やAPI制限を確認してください: {e}")
