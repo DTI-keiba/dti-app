@@ -29,9 +29,19 @@ def get_db_data():
 
 def format_time(seconds):
     if seconds is None or seconds <= 0 or pd.isna(seconds): return ""
+    if isinstance(seconds, str): return seconds
     m = int(seconds // 60)
     s = seconds % 60
     return f"{m}:{s:04.1f}"
+
+def parse_time_str(time_str):
+    try:
+        if ":" in str(time_str):
+            m, s = map(float, str(time_str).split(':'))
+            return m * 60 + s
+        return float(time_str)
+    except:
+        return 0.0
 
 COURSE_DATA = {
     "東京": 0.10, "中山": 0.25, "京都": 0.15, "阪神": 0.18, "中京": 0.20,
@@ -143,7 +153,8 @@ with tab2:
     if not df.empty:
         col_s1, col_s2 = st.columns([1, 1])
         with col_s1: search_h = st.text_input("馬名で検索", key="search_h")
-        unique_horses = sorted(df['name'].dropna().unique())
+        # --- 修正箇所：馬名のソートエラー防止 ---
+        unique_horses = sorted([str(x) for x in df['name'].dropna().unique()])
         with col_s2: target_h = st.selectbox("条件を編集する馬を選択", ["未選択"] + unique_horses)
         if target_h != "未選択":
             h_idx = df[df['name'] == target_h].index[-1]
@@ -162,7 +173,8 @@ with tab3:
     st.header("🏁 答え合わせ & レース別履歴")
     df = get_db_data()
     if not df.empty:
-        race_list = sorted(list(df['last_race'].dropna().unique()))
+        # --- 修正箇所：レース名のソートエラー防止 ---
+        race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
         sel_race = st.selectbox("レース選択", race_list)
         if sel_race:
             race_df = df[df['last_race'] == sel_race].copy()
@@ -183,7 +195,8 @@ with tab4:
     st.header("🎯 シミュレーター & 統合評価")
     df = get_db_data()
     if not df.empty:
-        selected = st.multiselect("出走予定馬を選択", sorted(list(df['name'].dropna().unique())))
+        # --- 修正箇所：馬名のソートエラー防止 ---
+        selected = st.multiselect("出走予定馬を選択", sorted([str(x) for x in df['name'].dropna().unique()]))
         if selected:
             col_cfg1, col_cfg2 = st.columns(2)
             with col_cfg1:
@@ -215,23 +228,30 @@ with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
     if not df.empty:
-        st.subheader("🛠️ データの手動修正（エディタ）")
-        st.info("表の中の数値を直接書き換えて「修正を保存」を押してください。")
-        edited_df = st.data_editor(df.sort_values("date", ascending=False), num_rows="dynamic", key="data_editor_main")
+        st.subheader("🛠️ データの手動修正")
+        edit_display_df = df.copy()
+        edit_display_df['base_rtc'] = edit_display_df['base_rtc'].apply(format_time)
+        st.info("base_rtcは '1:59.3' の形式で修正可能です。")
+        edited_df = st.data_editor(edit_display_df.sort_values("date", ascending=False), num_rows="dynamic", key="data_editor_main")
         if st.button("💾 修正を保存する"):
-            conn.update(data=edited_df)
-            st.success("データベースを更新しました。")
-            st.rerun()
+            save_df = edited_df.copy()
+            save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
+            conn.update(data=save_df)
+            st.success("データベースを更新しました。"); st.rerun()
 
         st.divider()
         st.subheader("❌ 特定データの削除")
         col_d1, col_d2 = st.columns(2)
         with col_d1:
-            del_race = st.selectbox("削除するレースを選択", ["未選択"] + sorted(list(df['last_race'].unique())))
+            # --- 修正箇所：レース名のソートエラー防止 ---
+            race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
+            del_race = st.selectbox("削除するレースを選択", ["未選択"] + race_list)
             if del_race != "未選択" and st.button(f"「{del_race}」を削除"):
                 conn.update(data=df[df['last_race'] != del_race]); st.rerun()
         with col_d2:
-            del_horse = st.selectbox("削除する馬を選択", ["未選択"] + sorted(list(df['name'].unique())))
+            # --- 修正箇所：馬名のソートエラー防止 ---
+            horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
+            del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
                 conn.update(data=df[df['name'] != del_horse]); st.rerun()
         if st.button("💣 全データ初期化", disabled=not st.checkbox("本当に全消去する")):
