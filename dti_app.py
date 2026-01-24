@@ -136,9 +136,11 @@ with tab1:
                 if l3f_candidate == 0.0: l3f_candidate = l3f_val 
                 name = "不明"; parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
+                
                 load_score = 0.0
                 if pace_status == "ハイペース": load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
                 elif pace_status == "スローペース": load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
+                
                 eval_parts = []; is_counter_target = False
                 if result_pos <= 5:
                     if (bias_type == "前有利" and last_pos >= 10.0) or (bias_type == "後有利" and last_pos <= 3.0):
@@ -151,9 +153,12 @@ with tab1:
                 auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 weight_adj = (weight - 56.0) * 0.1
                 actual_time_adj = track_index / 10.0
-                rtc = (indiv_time - weight_adj - actual_time_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
+                load_time_adj = load_score / 10.0
+                rtc = (indiv_time - weight_adj - actual_time_adj - load_time_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
+                
+                # 🌟 notes欄に斤量と4角順位をセット
                 new_rows.append({
-                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg",
+                    "name": name, "base_rtc": rtc, "last_race": r_name, "course": c_name, "dist": dist, "notes": f"{weight}kg / 4角:{int(last_pos)}",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "f3f": f3f_val, "l3f": l3f_candidate, "load": last_pos, "memo": auto_comment,
                     "date": r_date.strftime("%Y-%m-%d"), "cushion": cush, "water": (w_4c+w_goal)/2, "next_buy_flag": "★逆行狙い" if is_counter_target else "", "result_pos": result_pos
                 })
@@ -162,6 +167,7 @@ with tab1:
                 with st.spinner("DB保存中..."):
                     time.sleep(1.0); conn.update(data=updated_df); st.cache_data.clear(); time.sleep(1.0); st.success(f"✅ 解析完了"); st.rerun()
 
+# --- 以降のコード（Tab2-Tab6）は一切変更なし ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
@@ -275,35 +281,22 @@ with tab6:
                 try: time.sleep(1.0); conn.update(data=save_df); st.cache_data.clear(); time.sleep(1.5); st.success("修正完了"); st.rerun()
                 except Exception as e: st.error(f"保存エラー: {e}")
         
-        # --- 🌟 追加機能: 削除時のダブルチェックセクション ---
         st.divider()
         st.subheader("❌ 特定データの削除（要確認）")
         col_d1, col_d2 = st.columns(2)
-        
         with col_d1:
             race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + race_list)
             if del_race != "未選択":
-                # ダブルチェック用
                 confirm_race = st.checkbox(f"「{del_race}」の全データを削除してよろしいですか？", key="confirm_race")
                 if confirm_race:
                     if st.button(f"🚨 「{del_race}」を完全に削除", type="primary"):
-                        time.sleep(1.0)
-                        conn.update(data=df[df['last_race'] != del_race])
-                        st.cache_data.clear()
-                        st.success("削除しました")
-                        st.rerun()
-        
+                        time.sleep(1.0); conn.update(data=df[df['last_race'] != del_race]); st.cache_data.clear(); st.success("削除しました"); st.rerun()
         with col_d2:
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
             if del_horse != "未選択":
-                # ダブルチェック用
                 confirm_horse = st.checkbox(f"「{del_horse}」の全履歴を削除してよろしいですか？", key="confirm_horse")
                 if confirm_horse:
                     if st.button(f"🚨 「{del_horse}」を完全に削除", type="primary"):
-                        time.sleep(1.0)
-                        conn.update(data=df[df['name'] != del_horse])
-                        st.cache_data.clear()
-                        st.success("削除しました")
-                        st.rerun()
+                        time.sleep(1.0); conn.update(data=df[df['name'] != del_horse]); st.cache_data.clear(); st.success("削除しました"); st.rerun()
