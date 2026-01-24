@@ -90,8 +90,7 @@ with tab1:
         cush = st.number_input("クッション値", 7.0, 12.0, 9.5, step=0.1) if t_type == "芝" else 9.5
         w_4c = st.number_input("含水率：4角 (%)", 0.0, 50.0, 10.0, step=0.1)
         w_goal = st.number_input("含水率：ゴール前 (%)", 0.0, 50.0, 10.0, step=0.1)
-        # 🌟 馬場指数をそのまま入力（指数 10 = 1.0秒 として計算）
-        track_index = st.number_input("馬場指数", -50, 50, 0, step=1, help="時計が掛かるほどプラス、速いほどマイナス。指数10で1秒補正されます。")
+        track_index = st.number_input("馬場指数", -50, 50, 0, step=1)
         bias_val = st.slider("馬場バイアス (内有利 -1.0 ↔ 外有利 +1.0)", -1.0, 1.0, 0.0)
 
     col1, col2 = st.columns(2)
@@ -151,7 +150,6 @@ with tab1:
                 elif l3f_diff < -2.0: eval_parts.append("📉 失速大")
                 auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 weight_adj = (weight - 56.0) * 0.1
-                # 🌟 馬場指数を秒数に換算して適用
                 actual_time_adj = track_index / 10.0
                 rtc = (indiv_time - weight_adj - actual_time_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 new_rows.append({
@@ -164,7 +162,6 @@ with tab1:
                 with st.spinner("DB保存中..."):
                     time.sleep(1.0); conn.update(data=updated_df); st.cache_data.clear(); time.sleep(1.0); st.success(f"✅ 解析完了"); st.rerun()
 
-# --- Tab 2 ～ Tab 6 は以前の修正をそのまま維持 ---
 with tab2:
     st.header("📊 馬別履歴 & 買い条件設定")
     df = get_db_data()
@@ -277,16 +274,36 @@ with tab6:
             with st.spinner("DB保存中..."):
                 try: time.sleep(1.0); conn.update(data=save_df); st.cache_data.clear(); time.sleep(1.5); st.success("修正完了"); st.rerun()
                 except Exception as e: st.error(f"保存エラー: {e}")
+        
+        # --- 🌟 追加機能: 削除時のダブルチェックセクション ---
         st.divider()
-        st.subheader("❌ 特定データの削除")
+        st.subheader("❌ 特定データの削除（要確認）")
         col_d1, col_d2 = st.columns(2)
+        
         with col_d1:
             race_list = sorted([str(x) for x in df['last_race'].dropna().unique()])
             del_race = st.selectbox("削除するレースを選択", ["未選択"] + race_list)
-            if del_race != "未選択" and st.button(f"「{del_race}」を削除"):
-                time.sleep(1.0); conn.update(data=df[df['last_race'] != del_race]); st.cache_data.clear(); st.rerun()
+            if del_race != "未選択":
+                # ダブルチェック用
+                confirm_race = st.checkbox(f"「{del_race}」の全データを削除してよろしいですか？", key="confirm_race")
+                if confirm_race:
+                    if st.button(f"🚨 「{del_race}」を完全に削除", type="primary"):
+                        time.sleep(1.0)
+                        conn.update(data=df[df['last_race'] != del_race])
+                        st.cache_data.clear()
+                        st.success("削除しました")
+                        st.rerun()
+        
         with col_d2:
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
             del_horse = st.selectbox("削除する馬を選択", ["未選択"] + horse_list)
-            if del_horse != "未選択" and st.button(f"「{del_horse}」を削除"):
-                time.sleep(1.0); conn.update(data=df[df['name'] != del_horse]); st.cache_data.clear(); st.rerun()
+            if del_horse != "未選択":
+                # ダブルチェック用
+                confirm_horse = st.checkbox(f"「{del_horse}」の全履歴を削除してよろしいですか？", key="confirm_horse")
+                if confirm_horse:
+                    if st.button(f"🚨 「{del_horse}」を完全に削除", type="primary"):
+                        time.sleep(1.0)
+                        conn.update(data=df[df['name'] != del_horse])
+                        st.cache_data.clear()
+                        st.success("削除しました")
+                        st.rerun()
