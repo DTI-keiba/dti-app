@@ -23,9 +23,9 @@ def get_db_data_cached():
             if col not in df.columns:
                 df[col] = None
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        # 🌟 日付（新しい順）→ レース名（昇順）の二段階ソート
-        df = df.sort_values(["date", "last_race"], ascending=[False, True])
         df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
+        # 🌟 三段階ソート: 日付(降) → レース名(昇) → 着順(昇)
+        df = df.sort_values(["date", "last_race", "result_pos"], ascending=[False, True, True])
         df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
         # 🌟 データ型を数値に安全に変換
         for c in ['f3f', 'l3f', 'race_l3f', 'load']:
@@ -40,10 +40,11 @@ def get_db_data():
 
 # 🌟 API更新エラー対策のリトライ関数
 def safe_update(df):
-    # 🌟 保存前にも二段階ソートを適用して整理
-    if 'date' in df.columns and 'last_race' in df.columns:
+    # 🌟 保存前にも三段階ソートを適用して整理
+    if all(col in df.columns for col in ['date', 'last_race', 'result_pos']):
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        df = df.sort_values(["date", "last_race"], ascending=[False, True])
+        df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
+        df = df.sort_values(["date", "last_race", "result_pos"], ascending=[False, True, True])
     
     max_retries = 3
     for i in range(max_retries):
