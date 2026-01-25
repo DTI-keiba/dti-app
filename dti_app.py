@@ -23,6 +23,8 @@ def get_db_data_cached():
             if col not in df.columns:
                 df[col] = None
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        # 🌟 読み込み時に日付が新しい順にソート
+        df = df.sort_values("date", ascending=False)
         df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
         df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
         # 🌟 データ型を数値に安全に変換
@@ -38,6 +40,11 @@ def get_db_data():
 
 # 🌟 API更新エラー対策のリトライ関数
 def safe_update(df):
+    # 🌟 保存前にも日付が新しい順にソート（スプレッドシートの並び順を固定）
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        df = df.sort_values("date", ascending=False)
+    
     max_retries = 3
     for i in range(max_retries):
         try:
@@ -259,29 +266,21 @@ with tab4:
                 results = []
                 for h in selected:
                     h_history = df[df['name'] == h].sort_values("date")
-                    # 🌟 過去3走それぞれの「換算後RTC」を算出し、その平均を取る
                     last_3_runs = h_history.tail(3)
                     converted_rtcs = []
                     for idx, row in last_3_runs.iterrows():
                         p_dist = row['dist']
                         p_rtc = row['base_rtc']
                         if p_dist and p_dist > 0:
-                            # 各レースを今回の距離に換算
                             converted_rtcs.append(p_rtc / p_dist * target_dist)
                         else:
                             converted_rtcs.append(p_rtc)
                     
-                    # 3走分の換算後タイムの平均
                     avg_converted_rtc = sum(converted_rtcs) / len(converted_rtcs) if converted_rtcs else 0
                     h_latest = last_3_runs.iloc[-1]
-                    
-                    # 🌟 コース実績加点 (同じ競馬場での好走歴があれば -0.2秒)
                     course_bonus = -0.2 if any((h_history['course'] == target_c) & (h_history['result_pos'] <= 3)) else 0.0
-                    
-                    # 最終的な想定タイム (コース係数 + 加点含む)
                     final_rtc = avg_converted_rtc + (COURSE_DATA[target_c] * (target_dist/1600.0)) + course_bonus
                     
-                    # 🌟 評価ロジック
                     b_match = 1 if abs(h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]['cushion'] - current_cush) <= 0.5 else 0
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
@@ -299,7 +298,14 @@ with tab4:
                         "買いフラグ": h_latest['next_buy_flag'], 
                         "raw_rtc": final_rtc
                     })
-                st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム(個別換算平均)", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]])
+                
+                res_df = pd.DataFrame(results).sort_values(by="raw_rtc", ascending=True)
+
+                def highlight_high_value(row):
+                    is_high = row['評価'] in ['S', 'A'] and "逆行" in str(row['買いフラグ'])
+                    return ['background-color: #fffdc2' if is_high else '' for _ in row]
+
+                st.table(res_df[["評価", "馬名", "想定タイム(個別換算平均)", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]].style.apply(highlight_high_value, axis=1))
 
 with tab5:
     st.header("📈 トレンド")
@@ -313,11 +319,9 @@ with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
 
-    # 🌟 評価タグおよび next_buy_flag の再判定・更新ロジック
     def update_eval_tags_full(row):
         memo = str(row['memo']) if not pd.isna(row['memo']) else ""
         buy_flag = str(row['next_buy_flag']) if not pd.isna(row['next_buy_flag']) else ""
-        
         tags = ["🚀 アガリ優秀", "📉 失速大", "🔥 展開逆行", "💎 ﾊﾞｲｱｽ逆行"]
         for t in tags: memo = memo.replace(t, "")
         memo = memo.replace("//", "/").strip("/")
@@ -327,9 +331,7 @@ with tab6:
             try: return float(val) if not pd.isna(val) else 0.0
             except: return 0.0
 
-        f3f = to_f(row['f3f'])
-        l3f = to_f(row['l3f'])
-        r_l3f = to_f(row['race_l3f'])
+        f3f = to_f(row['f3f']); l3f = to_f(row['l3f']); r_l3f = to_f(row['race_l3f'])
         res_pos = to_f(row['result_pos'])
         if res_pos == 0: res_pos = 99.0
         load_pos = to_f(row['load'])
@@ -348,7 +350,6 @@ with tab6:
             diff = r_l3f - l3f
             if diff >= 0.5: new_tags.append("🚀 アガリ優秀")
             elif diff <= -1.0: new_tags.append("📉 失速大")
-        
         if res_pos <= 5:
             if (b_type == "前有利" and load_pos >= 10.0) or (b_type == "後有利" and load_pos <= 3.0):
                 new_tags.append("💎 ﾊﾞｲｱｽ逆行"); is_counter = True
@@ -361,7 +362,6 @@ with tab6:
             updated_memo = (parts[0] + "】" + "/".join(new_tags)).strip("/")
         else:
             updated_memo = "/".join(new_tags) if new_tags else "順境"
-            
         return updated_memo, updated_buy_flag
 
     if st.button("🔄 スプレッドシート側の修正を読み込んで再解析"):
