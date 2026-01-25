@@ -23,8 +23,6 @@ def get_db_data_cached():
             if col not in df.columns:
                 df[col] = None
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        # 🌟 読み込み時に日付が新しい順にソート
-        df = df.sort_values("date", ascending=False)
         df['result_pos'] = pd.to_numeric(df['result_pos'], errors='coerce')
         df['result_pop'] = pd.to_numeric(df['result_pop'], errors='coerce')
         # 🌟 データ型を数値に安全に変換
@@ -40,11 +38,6 @@ def get_db_data():
 
 # 🌟 API更新エラー対策のリトライ関数
 def safe_update(df):
-    # 🌟 保存前にも日付が新しい順にソート（スプレッドシートの並び順を固定）
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        df = df.sort_values("date", ascending=False)
-    
     max_retries = 3
     for i in range(max_retries):
         try:
