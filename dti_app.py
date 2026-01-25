@@ -259,23 +259,27 @@ with tab4:
                 results = []
                 for h in selected:
                     h_history = df[df['name'] == h].sort_values("date")
-                    # 🌟 1. 直近3走の平均ベース
+                    # 🌟 過去3走それぞれの「換算後RTC」を算出し、その平均を取る
                     last_3_runs = h_history.tail(3)
-                    avg_base_rtc = last_3_runs['base_rtc'].mean()
+                    converted_rtcs = []
+                    for idx, row in last_3_runs.iterrows():
+                        p_dist = row['dist']
+                        p_rtc = row['base_rtc']
+                        if p_dist and p_dist > 0:
+                            # 各レースを今回の距離に換算
+                            converted_rtcs.append(p_rtc / p_dist * target_dist)
+                        else:
+                            converted_rtcs.append(p_rtc)
+                    
+                    # 3走分の換算後タイムの平均
+                    avg_converted_rtc = sum(converted_rtcs) / len(converted_rtcs) if converted_rtcs else 0
                     h_latest = last_3_runs.iloc[-1]
                     
-                    # 🌟 2. 距離換算 (前走距離 → 今回距離)
-                    prev_dist = h_latest['dist']
-                    if prev_dist and prev_dist > 0:
-                        sim_rtc = (avg_base_rtc / prev_dist * target_dist)
-                    else:
-                        sim_rtc = avg_base_rtc
-                    
-                    # 🌟 3. コース実績加点 (同じ競馬場での好走歴があれば -0.2秒)
+                    # 🌟 コース実績加点 (同じ競馬場での好走歴があれば -0.2秒)
                     course_bonus = -0.2 if any((h_history['course'] == target_c) & (h_history['result_pos'] <= 3)) else 0.0
                     
                     # 最終的な想定タイム (コース係数 + 加点含む)
-                    final_rtc = sim_rtc + (COURSE_DATA[target_c] * (target_dist/1600.0)) + course_bonus
+                    final_rtc = avg_converted_rtc + (COURSE_DATA[target_c] * (target_dist/1600.0)) + course_bonus
                     
                     # 🌟 評価ロジック
                     b_match = 1 if abs(h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]['cushion'] - current_cush) <= 0.5 else 0
@@ -286,7 +290,7 @@ with tab4:
                     results.append({
                         "評価": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B",
                         "馬名": h, 
-                        "想定タイム(3走平均換算)": format_time(final_rtc),
+                        "想定タイム(個別換算平均)": format_time(final_rtc),
                         "前3F(最新)": h_latest['f3f'], 
                         "後3F(最新)": h_latest['l3f'], 
                         "馬場": "🔥" if b_match else "-", 
@@ -295,7 +299,7 @@ with tab4:
                         "買いフラグ": h_latest['next_buy_flag'], 
                         "raw_rtc": final_rtc
                     })
-                st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム(3走平均換算)", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]])
+                st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム(個別換算平均)", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]])
 
 with tab5:
     st.header("📈 トレンド")
