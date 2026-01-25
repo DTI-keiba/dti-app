@@ -254,17 +254,34 @@ with tab4:
             if st.button("🏁 統合スコア算出"):
                 results = []
                 for h in selected:
-                    h_history = df[df['name'] == h].sort_values("date"); h_latest = h_history.iloc[-1]
+                    h_history = df[df['name'] == h].sort_values("date")
+                    # 🌟 直近3走の抽出と平均RTCの算出
+                    last_3_runs = h_history.tail(3)
+                    avg_base_rtc = last_3_runs['base_rtc'].mean()
+                    h_latest = last_3_runs.iloc[-1]
+                    
+                    # 🌟 同コース好走（3着以内）があるかチェックして加点(0.2秒)
+                    course_bonus = -0.2 if any((h_history['course'] == target_c) & (h_history['result_pos'] <= 3)) else 0.0
+                    
+                    # 🌟 距離補正の適用
+                    prev_dist = h_latest['dist']
+                    if prev_dist and prev_dist > 0 and prev_dist != target_dist:
+                        sim_rtc = (avg_base_rtc / prev_dist * target_dist) + (COURSE_DATA[target_c] * (target_dist/1600.0)) + course_bonus
+                    else:
+                        sim_rtc = avg_base_rtc + (COURSE_DATA[target_c] * (target_dist/1600.0)) + course_bonus
+                    
                     b_match = 1 if abs(h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]['cushion'] - current_cush) <= 0.5 else 0
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
-                    prev_dist = h_latest['dist']
-                    if prev_dist and prev_dist > 0 and prev_dist != target_dist:
-                        sim_rtc = (h_latest['base_rtc'] / prev_dist * target_dist) + (COURSE_DATA[target_c] * (target_dist/1600.0))
-                    else: sim_rtc = h_latest['base_rtc'] + (COURSE_DATA[target_c] * (target_dist/1600.0))
-                    results.append({"評価": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B", "馬名": h, "想定タイム": format_time(sim_rtc), "前3F": h_latest['f3f'], "後3F": h_latest['l3f'], "馬場": "🔥" if b_match else "-", "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc})
-                st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム", "前3F", "後3F", "馬場", "解析メモ", "買いフラグ"]])
+                    
+                    results.append({
+                        "評価": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B",
+                        "馬名": h, "想定タイム(3走平均)": format_time(sim_rtc), "前3F": h_latest['f3f'], "後3F": h_latest['l3f'], 
+                        "馬場": "🔥" if b_match else "-", "コース実績": "⭐加点済" if course_bonus < 0 else "-",
+                        "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], "raw_rtc": sim_rtc
+                    })
+                st.table(pd.DataFrame(results).sort_values(by=["評価", "raw_rtc"], ascending=[True, True])[["評価", "馬名", "想定タイム(3走平均)", "前3F", "後3F", "馬場", "コース実績", "解析メモ", "買いフラグ"]])
 
 with tab5:
     st.header("📈 トレンド")
@@ -288,7 +305,7 @@ with tab6:
         memo = memo.replace("//", "/").strip("/")
         buy_flag = buy_flag.replace("★逆行狙い", "").strip()
 
-        # 🌟 ここを安全な型変換に修正 (errors='coerce' 的な処理を手動で行う)
+        # 🌟 ここを安全な型変換に修正
         def to_f(val):
             try: return float(val) if not pd.isna(val) else 0.0
             except: return 0.0
@@ -297,7 +314,7 @@ with tab6:
         l3f = to_f(row['l3f'])
         r_l3f = to_f(row['race_l3f'])
         res_pos = to_f(row['result_pos'])
-        if res_pos == 0: res_pos = 99.0 # 未入力対応
+        if res_pos == 0: res_pos = 99.0
         load_pos = to_f(row['load'])
         if load_pos == 0: load_pos = 7.0
         
