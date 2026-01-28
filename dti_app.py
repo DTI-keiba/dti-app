@@ -77,9 +77,16 @@ def parse_time_str(time_str):
         try: return float(time_str)
         except: return 0.0
 
+# 🌟 芝コース係数
 COURSE_DATA = {
     "東京": 0.10, "中山": 0.25, "京都": 0.15, "阪神": 0.18, "中京": 0.20,
     "新潟": 0.05, "小倉": 0.30, "福島": 0.28, "札幌": 0.22, "函館": 0.25
+}
+
+# 🌟 ダートコース係数（追加）
+DIRT_COURSE_DATA = {
+    "東京": 0.40, "中山": 0.55, "京都": 0.45, "阪神": 0.48, "中京": 0.50,
+    "新潟": 0.42, "小倉": 0.58, "福島": 0.60, "札幌": 0.62, "函館": 0.65
 }
 
 # --- メイン UI ---
@@ -260,8 +267,10 @@ with tab4:
             with col_cfg1: 
                 target_c = st.selectbox("次走の競馬場", list(COURSE_DATA.keys()), key="sc")
                 target_dist = st.selectbox("距離", list(range(1000, 3700, 100)), index=6)
+                sim_type = st.radio("次走種別", ["芝", "ダート"], horizontal=True)
             with col_cfg2: 
                 current_cush = st.slider("想定クッション値", 7.0, 12.0, 9.5)
+                current_water = st.slider("想定含水率 (%)", 0.0, 30.0, 10.0)
             
             if st.button("🏁 統合スコア算出"):
                 results = []
@@ -280,9 +289,31 @@ with tab4:
                     avg_converted_rtc = sum(converted_rtcs) / len(converted_rtcs) if converted_rtcs else 0
                     h_latest = last_3_runs.iloc[-1]
                     course_bonus = -0.2 if any((h_history['course'] == target_c) & (h_history['result_pos'] <= 3)) else 0.0
-                    final_rtc = avg_converted_rtc + (COURSE_DATA[target_c] * (target_dist/1600.0)) + course_bonus
                     
-                    b_match = 1 if abs(h_history[h_history['base_rtc'] == h_history['base_rtc'].min()].iloc[0]['cushion'] - current_cush) <= 0.5 else 0
+                    water_adj = (current_water - 10.0) * 0.05
+                    # 🌟 芝・ダートでのコース係数および含水率補正の分岐
+                    if sim_type == "ダート":
+                        c_dict = DIRT_COURSE_DATA
+                        water_adj = -water_adj # ダートは含水率高いほど速くなる
+                    else:
+                        c_dict = COURSE_DATA
+                    
+                    final_rtc = (avg_converted_rtc + 
+                                (c_dict[target_c] * (target_dist/1600.0)) + 
+                                course_bonus + 
+                                water_adj - 
+                                (9.5 - current_cush) * 0.1)
+                    
+                    good_runs = h_history[h_history['result_pos'] <= 3]
+                    b_match = 0
+                    if not good_runs.empty:
+                        match_condition = (
+                            (abs(good_runs['cushion'] - current_cush) <= 0.5) & 
+                            (abs(good_runs['water'] - current_water) <= 2.0)
+                        )
+                        if match_condition.any():
+                            b_match = 1
+                    
                     interval = (datetime.now() - h_latest['date']).days // 7
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
@@ -300,7 +331,7 @@ with tab4:
                         "raw_rtc": final_rtc
                     })
                 
-                res_df = pd.DataFrame(results).sort_values(by="raw_rtc", ascending=True)
+                res_df = pd.DataFrame(results).sort_values(by="評価", ascending=False)
 
                 def highlight_high_value(row):
                     is_high = row['評価'] in ['S', 'A'] and "逆行" in str(row['買いフラグ'])
@@ -320,12 +351,10 @@ with tab6:
     st.header("🗑 データベース管理 & 手動修正")
     df = get_db_data()
 
-    # 🌟 修正後にバイアス判定を含めすべて再計算する関数
     def update_eval_tags_full(row, df_context=None):
         memo = str(row['memo']) if not pd.isna(row['memo']) else ""
         buy_flag = str(row['next_buy_flag']) if not pd.isna(row['next_buy_flag']) else ""
         
-        # 既存タグの除去
         tags = ["🚀 アガリ優秀", "📉 失速大", "🔥 展開逆行", "💎 ﾊﾞｲｱｽ逆行"]
         for t in tags: memo = memo.replace(t, "")
         memo = memo.replace("//", "/").strip("/")
@@ -340,7 +369,6 @@ with tab6:
         if res_pos == 0: res_pos = 99.0
         if load_pos == 0: load_pos = 7.0
         
-        # 🌟 バイアス判定の再計算（同じレースの馬のloadから算出）
         b_type = "フラット"
         if df_context is not None and not pd.isna(row['last_race']):
             race_horses = df_context[df_context['last_race'] == row['last_race']]
@@ -349,7 +377,6 @@ with tab6:
                 avg_top_pos = top_3['load'].astype(float).mean()
                 b_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
 
-        # ペース判定の抽出
         p_status = "ミドルペース"
         if "ハイペース" in memo: p_status = "ハイペース"
         elif "スローペース" in memo: p_status = "スローペース"
@@ -367,12 +394,8 @@ with tab6:
 
         updated_buy_flag = ("★逆行狙い " + buy_flag).strip() if is_counter else buy_flag
         
-        # 🌟 ヘッダー部分（判定結果）の更新
-        if "【" in memo and "】" in memo:
+        if "】" in memo:
             parts = memo.split("】")
-            # ペース/バイアス部分を再構築
-            header_content = parts[0].replace("【", "").split("/")
-            # loadに基づく負荷の簡易再計算
             p_diff = 1.5 if p_status != "ミドルペース" else 0.0
             new_load_score = 0.0
             if p_status == "ハイペース": new_load_score = max(0, (10 - load_pos) * p_diff * 0.2)
@@ -399,7 +422,6 @@ with tab6:
         if st.button("💾 修正を保存する"):
             save_df = edited_df.copy(); save_df['base_rtc'] = save_df['base_rtc'].apply(parse_time_str)
             for i, row in save_df.iterrows():
-                # 🌟 編集後の全データ(save_df)を文脈として渡し、バイアスも再計算
                 m, f = update_eval_tags_full(row, save_df)
                 save_df.at[i, 'memo'], save_df.at[i, 'next_buy_flag'] = m, f
             if safe_update(save_df): st.success("修正完了"); st.rerun()
