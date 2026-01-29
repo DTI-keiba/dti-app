@@ -169,18 +169,17 @@ with tab1:
                         four_c_pos = valid_positions[-1]
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
             
-            # 🌟 馬場バイアス判定のロジック更新
-            top_3_entries = [d for d in parsed_data if d["res_pos"] <= 3]
-            # 10番手以下 or 3番手以内 の馬をカウント
-            outlier_horses = [d for d in top_3_entries if d["four_c_pos"] >= 10.0 or d["four_c_pos"] <= 3.0]
+            # 🌟 馬場バイアス判定のロジック更新 (4着位内での1頭判定)
+            top_4_entries = [d for d in parsed_data if d["res_pos"] <= 4]
+            outlier_horses = [d for d in top_4_entries if d["four_c_pos"] >= 10.0 or d["four_c_pos"] <= 3.0]
             
             if len(outlier_horses) == 1:
                 # 1頭だけ該当する場合、その馬を除いた着順上位3頭で判定
                 outlier_line = outlier_horses[0]["line"]
                 bias_calculation_entries = [d for d in parsed_data if d["line"] != outlier_line][:3]
             else:
-                # それ以外（2頭以上該当、または0頭）は従来通り3着以内で判定
-                bias_calculation_entries = top_3_entries
+                # それ以外は従来通り3着以内で判定
+                bias_calculation_entries = [d for d in parsed_data if d["res_pos"] <= 3]
             
             avg_top_pos = sum(d["four_c_pos"] for d in bias_calculation_entries) / len(bias_calculation_entries) if bias_calculation_entries else 7.0
             bias_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
@@ -385,15 +384,15 @@ with tab6:
         b_type = "フラット"
         if df_context is not None and not pd.isna(row['last_race']):
             race_horses = df_context[df_context['last_race'] == row['last_race']]
-            # 🌟 再解析時も同様の特殊除外ロジックを適用
-            top_3_race = race_horses[race_horses['result_pos'] <= 3]
-            outliers = top_3_race[(top_3_race['load'].astype(float) >= 10.0) | (top_3_race['load'].astype(float) <= 3.0)]
+            # 🌟 再解析時も4着位内1頭除外ロジックを適用
+            top_4_race = race_horses[race_horses['result_pos'] <= 4]
+            outliers = top_4_race[(top_4_race['load'].astype(float) >= 10.0) | (top_4_race['load'].astype(float) <= 3.0)]
             
             if len(outliers) == 1:
                 outlier_name = outliers.iloc[0]['name']
                 bias_set = race_horses[race_horses['name'] != outlier_name].sort_values("result_pos").head(3)
             else:
-                bias_set = top_3_race
+                bias_set = race_horses[race_horses['result_pos'] <= 3]
             
             if not bias_set.empty:
                 avg_top_pos = bias_set['load'].astype(float).mean()
