@@ -83,7 +83,7 @@ COURSE_DATA = {
     "新潟": 0.05, "小倉": 0.30, "福島": 0.28, "札幌": 0.22, "函館": 0.25
 }
 
-# 🌟 ダートコース係数（追加）
+# 🌟 ダートコース係数
 DIRT_COURSE_DATA = {
     "東京": 0.40, "中山": 0.55, "京都": 0.45, "阪神": 0.48, "中京": 0.50,
     "新潟": 0.42, "小倉": 0.58, "福島": 0.60, "札幌": 0.62, "函館": 0.65
@@ -169,9 +169,22 @@ with tab1:
                         four_c_pos = valid_positions[-1]
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
             
-            top_3_pos = [d["four_c_pos"] for d in parsed_data if d["res_pos"] <= 3]
-            avg_top_pos = sum(top_3_pos) / len(top_3_pos) if top_3_pos else 7.0
+            # 🌟 馬場バイアス判定のロジック更新
+            top_3_entries = [d for d in parsed_data if d["res_pos"] <= 3]
+            # 10番手以下 or 3番手以内 の馬をカウント
+            outlier_horses = [d for d in top_3_entries if d["four_c_pos"] >= 10.0 or d["four_c_pos"] <= 3.0]
+            
+            if len(outlier_horses) == 1:
+                # 1頭だけ該当する場合、その馬を除いた着順上位3頭で判定
+                outlier_line = outlier_horses[0]["line"]
+                bias_calculation_entries = [d for d in parsed_data if d["line"] != outlier_line][:3]
+            else:
+                # それ以外（2頭以上該当、または0頭）は従来通り3着以内で判定
+                bias_calculation_entries = top_3_entries
+            
+            avg_top_pos = sum(d["four_c_pos"] for d in bias_calculation_entries) / len(bias_calculation_entries) if bias_calculation_entries else 7.0
             bias_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
+            
             new_rows = []
             for entry in parsed_data:
                 line = entry["line"]; last_pos = entry["four_c_pos"]; result_pos = entry["res_pos"]
@@ -188,6 +201,7 @@ with tab1:
                 if l3f_candidate == 0.0: l3f_candidate = l3f_val 
                 name = "不明"; parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
+                
                 load_score = 0.0
                 if pace_status == "ハイペース": load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
                 elif pace_status == "スローペース": load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
@@ -291,10 +305,9 @@ with tab4:
                     course_bonus = -0.2 if any((h_history['course'] == target_c) & (h_history['result_pos'] <= 3)) else 0.0
                     
                     water_adj = (current_water - 10.0) * 0.05
-                    # 🌟 芝・ダートでのコース係数および含水率補正の分岐
                     if sim_type == "ダート":
                         c_dict = DIRT_COURSE_DATA
-                        water_adj = -water_adj # ダートは含水率高いほど速くなる
+                        water_adj = -water_adj
                     else:
                         c_dict = COURSE_DATA
                     
@@ -372,9 +385,18 @@ with tab6:
         b_type = "フラット"
         if df_context is not None and not pd.isna(row['last_race']):
             race_horses = df_context[df_context['last_race'] == row['last_race']]
-            top_3 = race_horses[race_horses['result_pos'] <= 3]
-            if not top_3.empty:
-                avg_top_pos = top_3['load'].astype(float).mean()
+            # 🌟 再解析時も同様の特殊除外ロジックを適用
+            top_3_race = race_horses[race_horses['result_pos'] <= 3]
+            outliers = top_3_race[(top_3_race['load'].astype(float) >= 10.0) | (top_3_race['load'].astype(float) <= 3.0)]
+            
+            if len(outliers) == 1:
+                outlier_name = outliers.iloc[0]['name']
+                bias_set = race_horses[race_horses['name'] != outlier_name].sort_values("result_pos").head(3)
+            else:
+                bias_set = top_3_race
+            
+            if not bias_set.empty:
+                avg_top_pos = bias_set['load'].astype(float).mean()
                 b_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
 
         p_status = "ミドルペース"
