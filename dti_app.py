@@ -169,16 +169,13 @@ with tab1:
                         four_c_pos = valid_positions[-1]
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
             
-            # 🌟 馬場バイアス判定のロジック更新 (4着位内での1頭判定)
             top_4_entries = [d for d in parsed_data if d["res_pos"] <= 4]
             outlier_horses = [d for d in top_4_entries if d["four_c_pos"] >= 10.0 or d["four_c_pos"] <= 3.0]
             
             if len(outlier_horses) == 1:
-                # 1頭だけ該当する場合、その馬を除いた着順上位3頭で判定
                 outlier_line = outlier_horses[0]["line"]
                 bias_calculation_entries = [d for d in parsed_data if d["line"] != outlier_line][:3]
             else:
-                # それ以外は従来通り3着以内で判定
                 bias_calculation_entries = [d for d in parsed_data if d["res_pos"] <= 3]
             
             avg_top_pos = sum(d["four_c_pos"] for d in bias_calculation_entries) / len(bias_calculation_entries) if bias_calculation_entries else 7.0
@@ -274,7 +271,9 @@ with tab4:
     st.header("🎯 シミュレーター & 統合評価")
     df = get_db_data()
     if not df.empty:
-        selected = st.multiselect("出走予定馬を選択", sorted([str(x) for x in df['name'].dropna().unique()]))
+        all_unique_names = sorted([str(x) for x in df['name'].dropna().unique()])
+        selected = st.multiselect("出走予定馬を選択（馬名入力で絞り込み可能）", options=all_unique_names)
+        
         if selected:
             col_cfg1, col_cfg2 = st.columns(2)
             with col_cfg1: 
@@ -343,13 +342,35 @@ with tab4:
                         "raw_rtc": final_rtc
                     })
                 
-                res_df = pd.DataFrame(results).sort_values(by="評価", ascending=False)
+                res_df = pd.DataFrame(results)
+                rank_map = {"S": 0, "A": 1, "B": 2}
+                res_df['rank_val'] = res_df['評価'].map(rank_map)
+                res_df = res_df.sort_values(by=['rank_val', 'raw_rtc'])
 
                 def highlight_high_value(row):
                     is_high = row['評価'] in ['S', 'A'] and "逆行" in str(row['買いフラグ'])
                     return ['background-color: #fffdc2' if is_high else '' for _ in row]
 
                 st.table(res_df[["評価", "馬名", "想定タイム(個別換算平均)", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]].style.apply(highlight_high_value, axis=1))
+
+                # 🌟 【新機能】選択した馬の過去の逆行履歴を一覧表示
+                st.divider()
+                st.subheader("🔍 選択馬の過去の逆行・好走履歴")
+                history_list = []
+                for h in selected:
+                    h_full_history = df[df['name'] == h].sort_values("date", ascending=False)
+                    for _, row in h_full_history.iterrows():
+                        memo_str = str(row['memo'])
+                        if "💎" in memo_str or "🔥" in memo_str or (not pd.isna(row['result_pos']) and row['result_pos'] <= 3):
+                            history_list.append({
+                                "馬名": h, "日付": row['date'].strftime("%Y-%m-%d"), "レース": row['last_race'],
+                                "着順": f"{int(row['result_pos'])}着" if not pd.isna(row['result_pos']) else "-",
+                                "解析メモ": memo_str, "買いフラグ": row['next_buy_flag']
+                            })
+                if history_list:
+                    st.dataframe(pd.DataFrame(history_list), use_container_width=True, hide_index=True)
+                else:
+                    st.info("選択した馬に特筆すべき過去の逆行・好走履歴はありません。")
 
 with tab5:
     st.header("📈 トレンド")
@@ -384,7 +405,6 @@ with tab6:
         b_type = "フラット"
         if df_context is not None and not pd.isna(row['last_race']):
             race_horses = df_context[df_context['last_race'] == row['last_race']]
-            # 🌟 再解析時も4着位内1頭除外ロジックを適用
             top_4_race = race_horses[race_horses['result_pos'] <= 4]
             outliers = top_4_race[(top_4_race['load'].astype(float) >= 10.0) | (top_4_race['load'].astype(float) <= 3.0)]
             
