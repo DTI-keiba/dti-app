@@ -329,8 +329,32 @@ with tab4:
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
                     
+                    # 🌟 特Sポイント算出ロジック (直近3走の逆行履歴)
+                    sp_score = 0
+                    sp_reasons = []
+                    
+                    # 1. 逆行耐性 (直近3走)
+                    counter_history = []
+                    for i, r_row in enumerate(reversed(last_3_runs.to_dict('records'))):
+                        if "💎" in str(r_row['memo']) or "🔥" in str(r_row['memo']):
+                            counter_history.append(f"{i+1}走前")
+                    if counter_history:
+                        sp_score += 1
+                        sp_reasons.append(f"{'/'.join(counter_history)}逆行")
+
+                    # 3. 勝ち切り適性 (過去馬場合致1着)
+                    if not h_history.empty:
+                        win_match = h_history[
+                            (h_history['result_pos'] == 1) & 
+                            (abs(h_history['cushion'] - current_cush) <= 0.5) & 
+                            (abs(h_history['water'] - current_water) <= 2.0)
+                        ]
+                        if not win_match.empty:
+                            sp_score += 1
+                            sp_reasons.append("馬場適性◎")
+
                     results.append({
-                        "評価": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B",
+                        "評価ランク": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B",
                         "馬名": h, 
                         "想定タイム(個別換算平均)": format_time(final_rtc),
                         "前3F(最新)": h_latest['f3f'], 
@@ -339,21 +363,37 @@ with tab4:
                         "実績": "⭐好走歴有" if course_bonus < 0 else "-",
                         "解析メモ": h_latest['memo'], 
                         "買いフラグ": h_latest['next_buy_flag'], 
-                        "raw_rtc": final_rtc
+                        "raw_rtc": final_rtc,
+                        "sp_score": sp_score,
+                        "sp_reason": f"({','.join(sp_reasons)})" if sp_reasons else ""
                     })
                 
                 res_df = pd.DataFrame(results)
-                rank_map = {"S": 0, "A": 1, "B": 2}
-                res_df['rank_val'] = res_df['評価'].map(rank_map)
+                
+                # 🌟 特S選出ロジック (S評価の中から上位2頭)
+                s_group = res_df[res_df['評価ランク'] == "S"].copy()
+                if not s_group.empty:
+                    # タイム優位性スコア (+1pt) 加点
+                    s_avg_rtc = s_group['raw_rtc'].mean()
+                    res_df.loc[res_df['評価ランク'] == "S", 'sp_score'] += (res_df['raw_rtc'] <= s_avg_rtc - 0.3).astype(int)
+                    
+                    # 特S判定 (上位2頭)
+                    res_df['評価'] = res_df['評価ランク']
+                    top_sp_indices = res_df[res_df['評価ランク'] == "S"].sort_values(['sp_score', 'raw_rtc'], ascending=[False, True]).head(2).index
+                    res_df.loc[top_sp_indices, '評価'] = "特S" + res_df.loc[top_sp_indices, 'sp_reason']
+
+                rank_map = {"特S": 0, "S": 1, "A": 2, "B": 3}
+                res_df['rank_val'] = res_df['評価'].apply(lambda x: rank_map.get(x[:2], 99))
                 res_df = res_df.sort_values(by=['rank_val', 'raw_rtc'])
 
                 def highlight_high_value(row):
-                    is_high = row['評価'] in ['S', 'A'] and "逆行" in str(row['買いフラグ'])
+                    is_sp = "特S" in str(row['評価'])
+                    is_high = row['評価'][:1] in ['S', 'A'] and "逆行" in str(row['買いフラグ'])
+                    if is_sp: return ['background-color: #fff700; font-weight: bold'] * len(row)
                     return ['background-color: #fffdc2' if is_high else '' for _ in row]
 
                 st.table(res_df[["評価", "馬名", "想定タイム(個別換算平均)", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]].style.apply(highlight_high_value, axis=1))
 
-                # 🌟 【新機能】選択した馬の過去の逆行履歴を一覧表示
                 st.divider()
                 st.subheader("🔍 選択馬の過去の逆行・好走履歴")
                 history_list = []
