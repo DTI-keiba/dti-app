@@ -77,7 +77,7 @@ def parse_time_str(time_str):
         try: return float(time_str)
         except: return 0.0
 
-# 🌟 芝コース係数
+# 🌟 芝コース係数 (基本スピード)
 COURSE_DATA = {
     "東京": 0.10, "中山": 0.25, "京都": 0.15, "阪神": 0.18, "中京": 0.20,
     "新潟": 0.05, "小倉": 0.30, "福島": 0.28, "札幌": 0.22, "函館": 0.25
@@ -87,6 +87,13 @@ COURSE_DATA = {
 DIRT_COURSE_DATA = {
     "東京": 0.40, "中山": 0.55, "京都": 0.45, "阪神": 0.48, "中京": 0.50,
     "新潟": 0.42, "小倉": 0.58, "福島": 0.60, "札幌": 0.62, "函館": 0.65
+}
+
+# 🌟 坂係数 (Slope Factor: 起伏によるスタミナ消耗/タイムロス)
+# 高低差が大きい場ほど値を大きく設定 (中山・中京・阪神・東京など)
+SLOPE_FACTORS = {
+    "中山": 0.005, "中京": 0.004, "京都": 0.002, "阪神": 0.004, "東京": 0.003,
+    "新潟": 0.001, "小倉": 0.002, "福島": 0.003, "札幌": 0.001, "函館": 0.002
 }
 
 # --- メイン UI ---
@@ -290,11 +297,23 @@ with tab4:
                     h_history = df[df['name'] == h].sort_values("date")
                     last_3_runs = h_history.tail(3)
                     converted_rtcs = []
+                    
+                    # 🌟 坂補正を加えた距離換算ロジック
                     for idx, row in last_3_runs.iterrows():
                         p_dist = row['dist']
                         p_rtc = row['base_rtc']
+                        p_course = row['course']
+                        
                         if p_dist and p_dist > 0:
-                            converted_rtcs.append(p_rtc / p_dist * target_dist)
+                            # 1. 単純距離比例
+                            base_conv = p_rtc / p_dist * target_dist
+                            # 2. 坂補正 (Slope Adjustment)
+                            # 元の場(p_course)と今回の場(target_c)の坂係数の差を計算
+                            s_from = SLOPE_FACTORS.get(p_course, 0.002)
+                            s_to = SLOPE_FACTORS.get(target_c, 0.002)
+                            # 坂の差分 × 距離の比率でタイムを微調整
+                            slope_adj = (s_to - s_from) * target_dist
+                            converted_rtcs.append(base_conv + slope_adj)
                         else:
                             converted_rtcs.append(p_rtc)
                     
@@ -329,11 +348,9 @@ with tab4:
                     rota_score = 1 if 4 <= interval <= 9 else 0
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
                     
-                    # 🌟 特Sポイント算出ロジック (直近3走の逆行履歴)
                     sp_score = 0
                     sp_reasons = []
                     
-                    # 1. 逆行耐性 (直近3走)
                     counter_history = []
                     for i, r_row in enumerate(reversed(last_3_runs.to_dict('records'))):
                         if "💎" in str(r_row['memo']) or "🔥" in str(r_row['memo']):
@@ -342,7 +359,6 @@ with tab4:
                         sp_score += 1
                         sp_reasons.append(f"{'/'.join(counter_history)}逆行")
 
-                    # 3. 勝ち切り適性 (過去馬場合致1着)
                     if not h_history.empty:
                         win_match = h_history[
                             (h_history['result_pos'] == 1) & 
@@ -369,16 +385,12 @@ with tab4:
                     })
                 
                 res_df = pd.DataFrame(results)
+                res_df['評価'] = res_df['評価ランク']
                 
-                # 🌟 特S選出ロジック (S評価の中から上位2頭)
                 s_group = res_df[res_df['評価ランク'] == "S"].copy()
                 if not s_group.empty:
-                    # タイム優位性スコア (+1pt) 加点
                     s_avg_rtc = s_group['raw_rtc'].mean()
                     res_df.loc[res_df['評価ランク'] == "S", 'sp_score'] += (res_df['raw_rtc'] <= s_avg_rtc - 0.3).astype(int)
-                    
-                    # 特S判定 (上位2頭)
-                    res_df['評価'] = res_df['評価ランク']
                     top_sp_indices = res_df[res_df['評価ランク'] == "S"].sort_values(['sp_score', 'raw_rtc'], ascending=[False, True]).head(2).index
                     res_df.loc[top_sp_indices, '評価'] = "特S" + res_df.loc[top_sp_indices, 'sp_reason']
 
