@@ -204,21 +204,23 @@ with tab1:
                 name = "不明"; parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
                 
-                # --- ここから負荷計算の追加ロジック ---
                 load_score = 0.0
-                # 条件: ハイ×前有利、スロー×後有利の場合は加点しない
                 if pace_status == "ハイペース" and bias_type != "前有利":
                     load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
                 elif pace_status == "スローペース" and bias_type != "後有利":
                     load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
-                # --- ここまで ---
                 
                 eval_parts = []; is_counter_target = False
                 if result_pos <= 5:
                     if (bias_type == "前有利" and last_pos >= 10.0) or (bias_type == "後有利" and last_pos <= 3.0):
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行"); is_counter_target = True
-                if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - l3f_candidate) > 1.5):
-                    eval_parts.append("🔥 展開逆行"); is_counter_target = True
+                
+                # --- 修正箇所：展開×バイアスの組み合わせ判定 ---
+                is_favored_combination = (pace_status == "ハイペース" and bias_type == "前有利") or (pace_status == "スローペース" and bias_type == "後有利")
+                if not is_favored_combination:
+                    if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - l3f_candidate) > 1.5):
+                        eval_parts.append("🔥 展開逆行"); is_counter_target = True
+                
                 l3f_diff_vs_race = l3f_val - l3f_candidate
                 if l3f_diff_vs_race >= 0.5: eval_parts.append("🚀 アガリ優秀")
                 elif l3f_diff_vs_race <= -1.0: eval_parts.append("📉 失速大")
@@ -302,16 +304,13 @@ with tab4:
                     last_3_runs = h_history.tail(3)
                     converted_rtcs = []
                     
-                    # 🌟 坂補正を加えた距離換算ロジック
                     for idx, row in last_3_runs.iterrows():
                         p_dist = row['dist']
                         p_rtc = row['base_rtc']
                         p_course = row['course']
                         
                         if p_dist and p_dist > 0:
-                            # 1. 単純距離比例
                             base_conv = p_rtc / p_dist * target_dist
-                            # 2. 坂補正 (Slope Adjustment)
                             s_from = SLOPE_FACTORS.get(p_course, 0.002)
                             s_to = SLOPE_FACTORS.get(target_c, 0.002)
                             slope_adj = (s_to - s_from) * target_dist
@@ -423,8 +422,6 @@ with tab4:
                             })
                 if history_list:
                     st.dataframe(pd.DataFrame(history_list), use_container_width=True, hide_index=True)
-                else:
-                    st.info("選択した馬に特筆すべき過去の逆行・好走履歴はありません。")
 
 with tab5:
     st.header("📈 トレンド")
@@ -461,13 +458,11 @@ with tab6:
             race_horses = df_context[df_context['last_race'] == row['last_race']]
             top_4_race = race_horses[race_horses['result_pos'] <= 4]
             outliers = top_4_race[(top_4_race['load'].astype(float) >= 10.0) | (top_4_race['load'].astype(float) <= 3.0)]
-            
             if len(outliers) == 1:
                 outlier_name = outliers.iloc[0]['name']
                 bias_set = race_horses[race_horses['name'] != outlier_name].sort_values("result_pos").head(3)
             else:
                 bias_set = race_horses[race_horses['result_pos'] <= 3]
-            
             if not bias_set.empty:
                 avg_top_pos = bias_set['load'].astype(float).mean()
                 b_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
@@ -481,26 +476,25 @@ with tab6:
             diff = r_l3f - l3f
             if diff >= 0.5: new_tags.append("🚀 アガリ優秀")
             elif diff <= -1.0: new_tags.append("📉 失速大")
+        
+        # --- 修正箇所：再計算時の展開×バイアス判定 ---
+        is_favored_combination = (p_status == "ハイペース" and b_type == "前有利") or (p_status == "スローペース" and b_type == "後有利")
         if res_pos <= 5:
             if (b_type == "前有利" and load_pos >= 10.0) or (b_type == "後有利" and load_pos <= 3.0):
                 new_tags.append("💎 ﾊﾞｲｱｽ逆行"); is_counter = True
-            if (p_status == "ハイペース" and load_pos <= 3.0) or (p_status == "スローペース" and load_pos >= 10.0 and (f3f - l3f) > 1.5):
-                new_tags.append("🔥 展開逆行"); is_counter = True
+            if not is_favored_combination:
+                if (p_status == "ハイペース" and load_pos <= 3.0) or (p_status == "スローペース" and load_pos >= 10.0 and (f3f - l3f) > 1.5):
+                    new_tags.append("🔥 展開逆行"); is_counter = True
 
         updated_buy_flag = ("★逆行狙い " + buy_flag).strip() if is_counter else buy_flag
         
         if "】" in memo:
-            parts = memo.split("】")
             p_diff = 1.5 if p_status != "ミドルペース" else 0.0
-            
-            # --- ここから負荷計算の追加ロジック (再計算時用) ---
             new_load_score = 0.0
             if p_status == "ハイペース" and b_type != "前有利":
                 new_load_score = max(0, (10 - load_pos) * p_diff * 0.2)
             elif p_status == "スローペース" and b_type != "後有利":
                 new_load_score = max(0, (load_pos - 5) * p_diff * 0.1)
-            # --- ここまで ---
-            
             new_header = f"【{p_status}/{b_type}/負荷:{new_load_score:.1f}】"
             updated_memo = (new_header + "/".join(new_tags)).strip("/")
         else:
