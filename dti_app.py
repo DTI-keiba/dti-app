@@ -90,7 +90,6 @@ DIRT_COURSE_DATA = {
 }
 
 # 🌟 坂係数 (Slope Factor: 起伏によるスタミナ消耗/タイムロス)
-# 高低差が大きい場ほど値を大きく設定 (中山・中京・阪神・東京など)
 SLOPE_FACTORS = {
     "中山": 0.005, "中京": 0.004, "京都": 0.002, "阪神": 0.004, "東京": 0.003,
     "新潟": 0.001, "小倉": 0.002, "福島": 0.003, "札幌": 0.001, "函館": 0.002
@@ -205,9 +204,14 @@ with tab1:
                 name = "不明"; parts = re.findall(r'([ァ-ヶー]{2,})', line)
                 if parts: name = parts[0]
                 
+                # --- ここから負荷計算の追加ロジック ---
                 load_score = 0.0
-                if pace_status == "ハイペース": load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
-                elif pace_status == "スローペース": load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
+                # 条件: ハイ×前有利、スロー×後有利の場合は加点しない
+                if pace_status == "ハイペース" and bias_type != "前有利":
+                    load_score += max(0, (10 - last_pos) * abs(pace_diff) * 0.2)
+                elif pace_status == "スローペース" and bias_type != "後有利":
+                    load_score += max(0, (last_pos - 5) * abs(pace_diff) * 0.1)
+                # --- ここまで ---
                 
                 eval_parts = []; is_counter_target = False
                 if result_pos <= 5:
@@ -308,10 +312,8 @@ with tab4:
                             # 1. 単純距離比例
                             base_conv = p_rtc / p_dist * target_dist
                             # 2. 坂補正 (Slope Adjustment)
-                            # 元の場(p_course)と今回の場(target_c)の坂係数の差を計算
                             s_from = SLOPE_FACTORS.get(p_course, 0.002)
                             s_to = SLOPE_FACTORS.get(target_c, 0.002)
-                            # 坂の差分 × 距離の比率でタイムを微調整
                             slope_adj = (s_to - s_from) * target_dist
                             converted_rtcs.append(base_conv + slope_adj)
                         else:
@@ -490,9 +492,14 @@ with tab6:
         if "】" in memo:
             parts = memo.split("】")
             p_diff = 1.5 if p_status != "ミドルペース" else 0.0
+            
+            # --- ここから負荷計算の追加ロジック (再計算時用) ---
             new_load_score = 0.0
-            if p_status == "ハイペース": new_load_score = max(0, (10 - load_pos) * p_diff * 0.2)
-            elif p_status == "スローペース": new_load_score = max(0, (load_pos - 5) * p_diff * 0.1)
+            if p_status == "ハイペース" and b_type != "前有利":
+                new_load_score = max(0, (10 - load_pos) * p_diff * 0.2)
+            elif p_status == "スローペース" and b_type != "後有利":
+                new_load_score = max(0, (load_pos - 5) * p_diff * 0.1)
+            # --- ここまで ---
             
             new_header = f"【{p_status}/{b_type}/負荷:{new_load_score:.1f}】"
             updated_memo = (new_header + "/".join(new_tags)).strip("/")
