@@ -374,6 +374,10 @@ with tab4:
                     
                     final_rtc = (avg_converted_rtc + (c_dict[target_c] * (target_dist/1600.0)) + course_bonus + water_adj - (9.5 - current_cush) * 0.1)
                     
+                    # 🌟 過去の全履歴から逆行評価を抽出
+                    past_counters = h_history[h_history['memo'].str.contains("💎|🔥", na=False)]
+                    counter_history_str = " / ".join([f"{r['date'].strftime('%m/%d')}{r['last_race']}" for _, r in past_counters.iterrows()]) if not past_counters.empty else "-"
+                    
                     good_runs = h_history[h_history['result_pos'] <= 3]
                     b_match = 1 if not good_runs.empty and ((abs(good_runs['cushion'] - current_cush) <= 0.5) & (abs(good_runs['water'] - current_water) <= 2.0)).any() else 0
                     interval = (datetime.now() - h_latest['date']).days // 7
@@ -381,14 +385,14 @@ with tab4:
                     counter_score = 1 if "逆行" in str(h_latest['memo']) else 0
                     
                     sp_score = 0; sp_reasons = []
-                    counter_history = [f"{i+1}走前" for i, r in enumerate(reversed(last_3_runs.to_dict('records'))) if "💎" in str(r['memo']) or "🔥" in str(r['memo'])]
-                    if counter_history: sp_score += 1; sp_reasons.append(f"{'/'.join(counter_history)}逆行")
+                    counter_history_tags = [f"{i+1}走前" for i, r in enumerate(reversed(last_3_runs.to_dict('records'))) if "💎" in str(r['memo']) or "🔥" in str(r['memo'])]
+                    if counter_history_tags: sp_score += 1; sp_reasons.append(f"{'/'.join(counter_history_tags)}逆行")
                     if not h_history.empty and not h_history[(h_history['result_pos'] == 1) & (abs(h_history['cushion'] - current_cush) <= 0.5) & (abs(h_history['water'] - current_water) <= 2.0)].empty:
                         sp_score += 1; sp_reasons.append("馬場適性◎")
 
                     results.append({
                         "評価ランク": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B",
-                        "馬名": h, "想定タイム": format_time(final_rtc), "load": h_latest['load'], 
+                        "馬名": h, "想定タイム": format_time(final_rtc), "過去の逆行履歴": counter_history_str, "load": h_latest['load'], 
                         "前3F(最新)": h_latest['f3f'], "後3F(最新)": h_latest['l3f'], "馬場": "🔥" if b_match else "-", 
                         "実績": "⭐好走歴有" if course_bonus < 0 else "-", "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], 
                         "raw_rtc": final_rtc, "sp_score": sp_score, "sp_reason": f"({','.join(sp_reasons)})" if sp_reasons else ""
@@ -413,7 +417,7 @@ with tab4:
                     if is_sp: return ['background-color: #fff700; font-weight: bold'] * len(row)
                     return ['background-color: #fffdc2' if is_high else '' for _ in row]
 
-                st.table(res_df[["評価", "馬名", "想定タイム", "load", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]].style.apply(highlight, axis=1))
+                st.table(res_df[["評価", "馬名", "想定タイム", "過去の逆行履歴", "load", "前3F(最新)", "後3F(最新)", "馬場", "実績", "解析メモ", "買いフラグ"]].style.apply(highlight, axis=1))
 
 # --- Tab 5: トレンド解析 ---
 with tab5:
