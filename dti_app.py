@@ -356,7 +356,6 @@ with tab4:
                         
                         if p_dist and p_dist > 0:
                             # 🌟 【修正反映】シミュレーション時のRTC計算に load(4角通過順) を組み込む
-                            # 前走位置取り(load)が外/後ろ(数値大)ほどタイムロスがあるため、補正として加算調整
                             load_adj = (p_load - 7.0) * 0.02
                             base_conv = (p_rtc + load_adj) / p_dist * target_dist
                             s_from = SLOPE_FACTORS.get(p_course, 0.002); s_to = SLOPE_FACTORS.get(target_c, 0.002)
@@ -469,20 +468,24 @@ with tab6:
         if df_context is not None and not pd.isna(row['last_race']):
             race_horses = df_context[df_context['last_race'] == row['last_race']]
             
-            # 🌟 【修正反映】バイアス再判定の特異個体除外 & 4着補充
-            top_3_race = race_horses[race_horses['result_pos'] <= 3].sort_values('result_pos')
-            outliers = top_3_race[(top_3_race['load'].astype(float) >= 10.0) | (top_3_race['load'].astype(float) <= 3.0)]
+            # 🌟 【最新修正】特異個体(3着以内1頭のみ条件外)の除外と4着補充
+            top_3_race = race_horses[pd.to_numeric(race_horses['result_pos'], errors='coerce') <= 3].copy()
+            top_3_race['load'] = pd.to_numeric(top_3_race['load'], errors='coerce').fillna(7.0)
+            
+            # 4角通過順が10番手以下 or 3番手以内の馬を抽出
+            outliers = top_3_race[(top_3_race['load'] >= 10.0) | (top_3_race['load'] <= 3.0)]
             
             if len(outliers) == 1:
-                # 該当1頭を除き、4着を加える
+                # 該当1頭を除き、4着を加えた3頭で判定
                 base_entries = top_3_race[top_3_race['name'] != outliers.iloc[0]['name']]
-                fourth_horse = race_horses[race_horses['result_pos'] == 4]
+                fourth_horse = race_horses[pd.to_numeric(race_horses['result_pos'], errors='coerce') == 4].copy()
+                fourth_horse['load'] = pd.to_numeric(fourth_horse['load'], errors='coerce').fillna(7.0)
                 bias_set = pd.concat([base_entries, fourth_horse])
             else:
                 bias_set = top_3_race
                 
             if not bias_set.empty:
-                avg_top_pos = bias_set['load'].astype(float).mean()
+                avg_top_pos = bias_set['load'].mean()
                 b_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
 
         p_status = "ハイペース" if "ハイペース" in memo else "スローペース" if "スローペース" in memo else "ミドルペース"
