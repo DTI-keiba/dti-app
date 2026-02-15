@@ -204,17 +204,18 @@ with tab1:
                     if valid_positions: four_c_pos = valid_positions[-1]
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
             
-            # --- 🌟 【指示ロジック】バイアス判定の特異個体除外 & 4着補充 ---
+            # --- 🌟 【修正反映】バイアス判定ロジックの変更 ---
             top_3_entries = sorted([d for d in parsed_data if d["res_pos"] <= 3], key=lambda x: x["res_pos"])
+            # 4角通過順が10番手以下 or 3番手以内の馬を抽出
             outliers = [d for d in top_3_entries if d["four_c_pos"] >= 10.0 or d["four_c_pos"] <= 3.0]
             
             if len(outliers) == 1:
-                # 3着以内のうち特異な1頭を除き、4着の馬(res_pos=4)を加えた3頭で判定
+                # 指示通り、該当する1頭を除き、4着の馬(res_pos=4)を加えた3頭で判定
                 base_entries = [d for d in top_3_entries if d != outliers[0]]
                 fourth_place = [d for d in parsed_data if d["res_pos"] == 4]
                 bias_calculation_entries = base_entries + fourth_place
             else:
-                # 0頭または2頭以上の場合は現状維持（3着以内の3頭）で判定
+                # 2頭以上、または0頭の場合は現状維持（3着以内の3頭）で判定
                 bias_calculation_entries = top_3_entries
             
             avg_top_pos = sum(d["four_c_pos"] for d in bias_calculation_entries) / len(bias_calculation_entries) if bias_calculation_entries else 7.0
@@ -351,10 +352,11 @@ with tab4:
                     
                     for idx, row in last_3_runs.iterrows():
                         p_dist = row['dist']; p_rtc = row['base_rtc']; p_course = row['course']
-                        p_load = row['load'] # 🌟 指示: loadを計算に含める
+                        p_load = row['load']
                         
                         if p_dist and p_dist > 0:
-                            # 🌟 【指示ロジック】load(4角通過順)による負荷調整をRTCに組み込む
+                            # 🌟 【修正反映】シミュレーション時のRTC計算に load(4角通過順) を組み込む
+                            # 前走位置取り(load)が外/後ろ(数値大)ほどタイムロスがあるため、補正として加算調整
                             load_adj = (p_load - 7.0) * 0.02
                             base_conv = (p_rtc + load_adj) / p_dist * target_dist
                             s_from = SLOPE_FACTORS.get(p_course, 0.002); s_to = SLOPE_FACTORS.get(target_c, 0.002)
@@ -466,11 +468,13 @@ with tab6:
         b_type = "フラット"
         if df_context is not None and not pd.isna(row['last_race']):
             race_horses = df_context[df_context['last_race'] == row['last_race']]
-            # 🌟 【指示ロジック】3着以内ベースのバイアス再判定 & 4着補充
+            
+            # 🌟 【修正反映】バイアス再判定の特異個体除外 & 4着補充
             top_3_race = race_horses[race_horses['result_pos'] <= 3].sort_values('result_pos')
             outliers = top_3_race[(top_3_race['load'].astype(float) >= 10.0) | (top_3_race['load'].astype(float) <= 3.0)]
             
             if len(outliers) == 1:
+                # 該当1頭を除き、4着を加える
                 base_entries = top_3_race[top_3_race['name'] != outliers.iloc[0]['name']]
                 fourth_horse = race_horses[race_horses['result_pos'] == 4]
                 bias_set = pd.concat([base_entries, fourth_horse])
@@ -498,6 +502,7 @@ with tab6:
 
         updated_buy_flag = ("★逆行狙い " + buy_flag).strip() if is_counter else buy_flag
         if "】" in memo:
+            # 負荷の再計算
             p_diff = 1.5 if p_status != "ミドルペース" else 0.0
             new_load_score = 0.0
             if p_status == "ハイペース" and b_type != "前有利": new_load_score = max(0, (10 - load_pos) * p_diff * 0.2)
