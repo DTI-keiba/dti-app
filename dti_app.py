@@ -215,7 +215,7 @@ with tab1:
                     if (bias_type == "前有利" and last_pos >= 10.0) or (bias_type == "後有利" and last_pos <= 3.0):
                         eval_parts.append("💎 ﾊﾞｲｱｽ逆行"); is_counter_target = True
                 
-                # --- 修正箇所：展開×バイアスの組み合わせ判定 ---
+                # --- 展開×バイアスの組み合わせ判定 ---
                 is_favored_combination = (pace_status == "ハイペース" and bias_type == "前有利") or (pace_status == "スローペース" and bias_type == "後有利")
                 if not is_favored_combination:
                     if (pace_status == "ハイペース" and last_pos <= 3.0) or (pace_status == "スローペース" and last_pos >= 10.0 and (f3f_val - l3f_candidate) > 1.5):
@@ -477,7 +477,7 @@ with tab6:
             if diff >= 0.5: new_tags.append("🚀 アガリ優秀")
             elif diff <= -1.0: new_tags.append("📉 失速大")
         
-        # --- 修正箇所：再計算時の展開×バイアス判定 ---
+        # --- 再計算時の展開×バイアス判定 ---
         is_favored_combination = (p_status == "ハイペース" and b_type == "前有利") or (p_status == "スローペース" and b_type == "後有利")
         if res_pos <= 5:
             if (b_type == "前有利" and load_pos >= 10.0) or (b_type == "後有利" and load_pos <= 3.0):
