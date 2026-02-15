@@ -204,14 +204,17 @@ with tab1:
                     if valid_positions: four_c_pos = valid_positions[-1]
                 parsed_data.append({"line": line, "res_pos": res_pos, "four_c_pos": four_c_pos})
             
-            # --- 🌟 【指示ロジック】バイアス判定の特異個体除外 ---
-            top_3_entries = [d for d in parsed_data if d["res_pos"] <= 3]
+            # --- 🌟 【指示ロジック】バイアス判定の特異個体除外 & 4着補充 ---
+            top_3_entries = sorted([d for d in parsed_data if d["res_pos"] <= 3], key=lambda x: x["res_pos"])
             outliers = [d for d in top_3_entries if d["four_c_pos"] >= 10.0 or d["four_c_pos"] <= 3.0]
+            
             if len(outliers) == 1:
-                # 1頭だけ特異な通過順の馬を除いて判定
-                bias_calculation_entries = [d for d in top_3_entries if d != outliers[0]]
+                # 3着以内のうち特異な1頭を除き、4着の馬(res_pos=4)を加えた3頭で判定
+                base_entries = [d for d in top_3_entries if d != outliers[0]]
+                fourth_place = [d for d in parsed_data if d["res_pos"] == 4]
+                bias_calculation_entries = base_entries + fourth_place
             else:
-                # 0頭または2頭以上の場合は現状維持で判定
+                # 0頭または2頭以上の場合は現状維持（3着以内の3頭）で判定
                 bias_calculation_entries = top_3_entries
             
             avg_top_pos = sum(d["four_c_pos"] for d in bias_calculation_entries) / len(bias_calculation_entries) if bias_calculation_entries else 7.0
@@ -384,7 +387,7 @@ with tab4:
 
                     results.append({
                         "評価ランク": "S" if (b_match + rota_score + counter_score) >= 2 else "A" if (b_match + rota_score + counter_score) == 1 else "B",
-                        "馬名": h, "想定タイム": format_time(final_rtc), "load": h_latest['load'], # 🌟 表示に追加
+                        "馬名": h, "想定タイム": format_time(final_rtc), "load": h_latest['load'], 
                         "前3F(最新)": h_latest['f3f'], "後3F(最新)": h_latest['l3f'], "馬場": "🔥" if b_match else "-", 
                         "実績": "⭐好走歴有" if course_bonus < 0 else "-", "解析メモ": h_latest['memo'], "買いフラグ": h_latest['next_buy_flag'], 
                         "raw_rtc": final_rtc, "sp_score": sp_score, "sp_reason": f"({','.join(sp_reasons)})" if sp_reasons else ""
@@ -463,10 +466,17 @@ with tab6:
         b_type = "フラット"
         if df_context is not None and not pd.isna(row['last_race']):
             race_horses = df_context[df_context['last_race'] == row['last_race']]
-            # 🌟 【指示ロジック】3着以内ベースのバイアス再判定
-            top_3_race = race_horses[race_horses['result_pos'] <= 3]
+            # 🌟 【指示ロジック】3着以内ベースのバイアス再判定 & 4着補充
+            top_3_race = race_horses[race_horses['result_pos'] <= 3].sort_values('result_pos')
             outliers = top_3_race[(top_3_race['load'].astype(float) >= 10.0) | (top_3_race['load'].astype(float) <= 3.0)]
-            bias_set = top_3_race[top_3_race['name'] != outliers.iloc[0]['name']] if len(outliers) == 1 else top_3_race
+            
+            if len(outliers) == 1:
+                base_entries = top_3_race[top_3_race['name'] != outliers.iloc[0]['name']]
+                fourth_horse = race_horses[race_horses['result_pos'] == 4]
+                bias_set = pd.concat([base_entries, fourth_horse])
+            else:
+                bias_set = top_3_race
+                
             if not bias_set.empty:
                 avg_top_pos = bias_set['load'].astype(float).mean()
                 b_type = "前有利" if avg_top_pos <= 4.0 else "後有利" if avg_top_pos >= 10.0 else "フラット"
