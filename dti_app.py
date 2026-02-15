@@ -159,6 +159,7 @@ with tab1:
         w_goal = st.number_input("含水率：ゴール前地点 (%)", 0.0, 50.0, 10.0, step=0.1)
         track_index = st.number_input("馬場指数 (JRA公式または独自)", -50, 50, 0, step=1)
         bias_val = st.slider("馬場バイアス (内有利 -1.0 ↔ 外有利 +1.0)", -1.0, 1.0, 0.0, step=0.1)
+        # 開催週入力
         track_week = st.number_input("開催週 (例: 1, 8)", 1, 12, 1)
 
     col1, col2 = st.columns(2)
@@ -170,6 +171,7 @@ with tab1:
             laps = [float(x) for x in re.findall(r'\d+\.\d', lap_input)]
             if len(laps) >= 3:
                 f3f_val = sum(laps[:3]); l3f_val = sum(laps[-3:]); pace_diff = f3f_val - l3f_val
+                # 🌟 追加機能：距離別ペースしきい値
                 dynamic_threshold = 1.0 * (dist / 1600.0)
                 if pace_diff < -dynamic_threshold: pace_status = "ハイペース"
                 elif pace_diff > dynamic_threshold: pace_status = "スローペース"
@@ -279,7 +281,6 @@ with tab1:
                 field_attr = "多" if max_runners >= 16 else "少" if max_runners <= 10 else "中"
                 auto_comment = f"【{pace_status}/{bias_type}/負荷:{load_score:.1f}({field_attr})/{m_note}】{'/'.join(eval_parts) if eval_parts else '順境'}"
                 
-                # --- 開催週補正 ---
                 week_adj = (track_week - 1) * 0.05
                 rtc = (indiv_time - (weight - 56.0) * 0.1 - track_index / 10.0 - load_score / 10.0 - week_adj) + bias_val - ((w_4c+w_goal)/2 - 10.0)*0.05 - (9.5-cush)*0.1 + (dist - 1600) * 0.0005
                 
@@ -415,8 +416,7 @@ with tab4:
                             converted_rtcs.append(base_conv + slope_adj)
                     
                     avg_converted_rtc = sum(converted_rtcs) / len(converted_rtcs) if converted_rtcs else 0
-                    best_dist = h_history.loc[h_history['base_rtc'].idxmin(), 'dist']
-                    avg_converted_rtc += (abs(target_dist - best_dist) / 100) * 0.05
+                    avg_converted_rtc += (abs(target_dist - h_history.loc[h_history['base_rtc'].idxmin(), 'dist']) / 100) * 0.05
                     
                     if len(h_history) >= 2 and h_history.iloc[-1]['base_rtc'] < h_history.iloc[-2]['base_rtc'] - 0.2:
                         avg_converted_rtc -= 0.15
@@ -443,7 +443,6 @@ with tab4:
                 pace_pred = "ハイペース傾向" if styles_count["逃げ"] >= 2 or (styles_count["逃げ"] + styles_count["先行"]) >= num_selected * 0.6 else "スローペース傾向" if styles_count["逃げ"] == 0 and styles_count["先行"] <= 1 else "ミドルペース"
                 
                 res_df = pd.DataFrame(results)
-                # 脚質・展開シナジー反映（頭数強化）
                 pace_multiplier = 1.5 if num_selected >= 15 else 1.0
                 def apply_synergy(row):
                     adj = 0.0
@@ -599,9 +598,15 @@ with tab6:
                 if safe_update(df[df['last_race'] != del_race]): st.rerun()
         with col_d2:
             horse_list = sorted([str(x) for x in df['name'].dropna().unique()])
-            del_horse = st.selectbox("削除対象馬", ["未選択"] + horse_list)
-            if del_horse != "未選択" and st.button(f"🚨 {del_horse} を削除"):
+            del_horse = st.selectbox("リストから選択して削除", ["未選択"] + horse_list)
+            if del_horse != "未選択" and st.button(f"🚨 選択馬 {del_horse} を削除"):
                 if safe_update(df[df['name'] != del_horse]): st.rerun()
+            
+            # 🌟 【新機能】削除する馬名を直接入力
+            st.write("---")
+            del_horse_input = st.text_input("削除する馬名を直接入力（一括削除用）")
+            if st.button(f"🚨 入力馬 {del_horse_input} をDBから完全削除") and del_horse_input:
+                if safe_update(df[df['name'] != del_horse_input]): st.rerun()
 
         st.divider()
         with st.expander("☢️ システム初期化"):
