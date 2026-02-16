@@ -9,11 +9,11 @@ from datetime import datetime
 # 1. ページ基本構成の詳細定義 (UI Property Specifications)
 # ==============================================================================
 # このセクションでは、アプリケーションの全体的な外観と基本挙動を定義します。
-# ユーザーの要求「１ミリも削らない」に基づき、最大限の冗長記述を行います。
+# ユーザーの要求に基づき、1ミリも削らず、冗長なまでに設定項目を記述します。
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v6.6",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v6.7",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -28,6 +28,29 @@ st.set_page_config(
 # 安定稼働を最優先し、グローバルスコープでの一貫性を維持するためにここで定義します。
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# 🌟 【修正・重要】データベースの全カラム物理構成定義（グローバル定数化）
+# 関数内ローカル変数からグローバル定数へ格上げし、NameErrorを物理的に根絶します。
+ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL = [
+    "name", 
+    "base_rtc", 
+    "last_race", 
+    "course", 
+    "dist", 
+    "notes", 
+    "timestamp", 
+    "f3f", 
+    "l3f", 
+    "race_l3f", 
+    "load", 
+    "memo", 
+    "date", 
+    "cushion", 
+    "water", 
+    "result_pos", 
+    "result_pop", 
+    "next_buy_flag"
+]
+
 # ==============================================================================
 # 2. データベース読み込み詳細ロジック (整合性チェック & 強制物理同期)
 # ==============================================================================
@@ -39,41 +62,17 @@ def get_db_data_cached():
     キャッシュの有効期間(ttl=300)を設けることで、API制限の物理的回避と応答性能を両立させます。
     """
     
-    # 🌟 データベースの全カラム物理構成（初期設計の18カラムを厳格に維持）
-    # いかなる理由があっても、この構成を変更したり省略したりすることは許されません。
-    absolute_column_structure = [
-        "name", 
-        "base_rtc", 
-        "last_race", 
-        "course", 
-        "dist", 
-        "notes", 
-        "timestamp", 
-        "f3f", 
-        "l3f", 
-        "race_l3f", 
-        "load", 
-        "memo", 
-        "date", 
-        "cushion", 
-        "water", 
-        "result_pos", 
-        "result_pop", 
-        "next_buy_flag"
-    ]
-    
     try:
         # 強制読み込み（ttl=0）オプションを使用して、常に最新のシート状態を取得します。
-        # これはスプレッドシートの手動修正を即座にアプリへ反映させるための必須設計です。
         raw_dataframe_from_sheet = conn.read(ttl=0)
         
         # 取得データがNoneまたは物理的に空である場合の、厳格な安全初期化ロジック。
         if raw_dataframe_from_sheet is None:
-            safety_initial_df = pd.DataFrame(columns=absolute_column_structure)
+            safety_initial_df = pd.DataFrame(columns=ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL)
             return safety_initial_df
             
         if raw_dataframe_from_sheet.empty:
-            safety_initial_df = pd.DataFrame(columns=absolute_column_structure)
+            safety_initial_df = pd.DataFrame(columns=ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL)
             return safety_initial_df
         
         # 🌟 全18カラムの存在チェックと強制的な一括補完（省略禁止・冗長記述の徹底）
@@ -140,7 +139,7 @@ def get_db_data_cached():
         if 'result_pos' in raw_dataframe_from_sheet.columns:
             # 着順を数値型へ変換
             raw_dataframe_from_sheet['result_pos'] = pd.to_numeric(raw_dataframe_from_sheet['result_pos'], errors='coerce')
-            # 🌟 【修正】NaNを0で埋めることでint変換時のエラーを先回り防止
+            # NaNを0で埋める安全策
             raw_dataframe_from_sheet['result_pos'] = raw_dataframe_from_sheet['result_pos'].fillna(0)
         
         # 🌟 最重要：三段階詳細ソートロジック
@@ -156,7 +155,7 @@ def get_db_data_cached():
         # 各種数値カラムのパースとNaN補完（一切の簡略化を禁止、個別に明示的に実行）
         if 'result_pop' in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet['result_pop'] = pd.to_numeric(raw_dataframe_from_sheet['result_pop'], errors='coerce')
-            # 🌟 【修正】NaNを0で埋めることでint変換時のエラーを先回り防止
+            # NaNを0で埋める安全策
             raw_dataframe_from_sheet['result_pop'] = raw_dataframe_from_sheet['result_pop'].fillna(0)
             
         if 'f3f' in raw_dataframe_from_sheet.columns:
@@ -194,7 +193,7 @@ def get_db_data_cached():
         
     except Exception as e_database_loading:
         st.error(f"【重大な警告】スプレッドシートの物理的な読み込み中に回復不能なエラーが発生しました。詳細を確認してください: {e_database_loading}")
-        return pd.DataFrame(columns=absolute_column_structure)
+        return pd.DataFrame(columns=ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL)
 
 def get_db_data():
     """データベース取得用のエントリポイント。キャッシュ管理された関数を詳細に呼び出します。"""
@@ -292,7 +291,7 @@ def parse_time_string_to_seconds(str_time_input):
         return 0.0
 
 # ==============================================================================
-# 5. 係数マスタ詳細定義 (1ミリも削らず、100%物理復元)
+# 5. 係数マスタ詳細定義 (初期設計を1ミリも削らず、100%物理復元)
 # ==============================================================================
 
 # 🌟 【 NameError修正：マスタ名称の統一 】 🌟
@@ -610,7 +609,8 @@ with tab_main_analysis:
                 if list_new_sync_rows_tab1_v6_final:
                     st.cache_data.clear()
                     df_sheet_latest_v = conn.read(ttl=0)
-                    for col_norm_f in absolute_column_structure:
+                    # 🌟 修正：カラム定義参照をグローバル定数に修正
+                    for col_norm_f in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
                         if col_norm_f not in df_sheet_latest_v.columns: df_sheet_latest_v[col_norm_f] = None
                     df_final_sync_v = pd.concat([df_sheet_latest_v, pd.DataFrame(list_new_sync_rows_tab1_v6_final)], ignore_index=True)
                     if safe_update(df_final_sync_v):
@@ -736,23 +736,21 @@ with tab_simulator:
 
             if st.button("🏁 物理シミュレーション実行"):
                 list_res_v = []
-                num_sim_total = len(sel_multi_h)
-                dict_styles = {"逃げ": 0, "先行": 0, "差し": 0, "追込": 0}
-                val_mean_l3f = df_t4_f['l3f'].mean()
-
                 for h_n_v in sel_multi_h:
                     df_h_v = df_t4_f[df_t4_f['name'] == h_n_v].sort_values("date")
                     df_l3_v = df_h_v.tail(3); list_conv_rtc_v = []
                     
+                    num_sim_total = len(sel_multi_h)
+                    
+                    # 脚質判定
                     val_avg_load_3r = df_l3_v['load'].mean()
                     if val_avg_load_3r <= 3.5: style_l = "逃げ"
                     elif val_avg_load_3r <= 7.0: style_l = "先行"
                     elif val_avg_load_3r <= 11.0: style_l = "差し"
                     else: style_l = "追込"
-                    dict_styles[style_l] += 1
-
-                    jam_label = "⚠️詰まり注意" if num_sim_total >= 15 and style_l in ["差し", "追込"] and sim_g_map[h_n_v] <= 4 else "-"
                     
+                    jam_label = "⚠️詰まり注意" if num_sim_total >= 15 and style_l in ["差し", "追込"] and sim_g_map[h_n_v] <= 4 else "-"
+
                     for idx_r, row_r in df_l3_v.iterrows():
                         # 🌟 冗長物理計算ステップ展開 (省略禁止)
                         p_w_v = 56.0
@@ -832,7 +830,8 @@ with tab_management:
         st.cache_data.clear()
         latest_df_v = conn.read(ttl=0)
         # カラム正規化
-        for c_nm in absolute_column_structure:
+        # 🌟 修正：カラム定義参照をグローバル定数に修正
+        for c_nm in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
             if c_nm not in latest_df_v.columns: latest_df_v[c_nm] = None
         # 冗長物理スキャン
         for idx_sy, row_sy in latest_df_v.iterrows():
