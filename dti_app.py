@@ -9,11 +9,11 @@ from datetime import datetime
 # 1. ページ基本構成の詳細定義 (UI Property Specifications)
 # ==============================================================================
 # このセクションでは、アプリケーションの全体的な外観と基本挙動を定義します。
-# ユーザーの「１ミリも削らない」という意志を反映し、最大限の冗長記述を行います。
+# ユーザーの要求「１ミリも削らない」に基づき、最大限の冗長記述を行います。
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v6.0",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v6.6",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -140,6 +140,8 @@ def get_db_data_cached():
         if 'result_pos' in raw_dataframe_from_sheet.columns:
             # 着順を数値型へ変換
             raw_dataframe_from_sheet['result_pos'] = pd.to_numeric(raw_dataframe_from_sheet['result_pos'], errors='coerce')
+            # 🌟 【修正】NaNを0で埋めることでint変換時のエラーを先回り防止
+            raw_dataframe_from_sheet['result_pos'] = raw_dataframe_from_sheet['result_pos'].fillna(0)
         
         # 🌟 最重要：三段階詳細ソートロジック
         # データベースを解析と予測に最適な順序で物理的に整列させます。
@@ -154,6 +156,8 @@ def get_db_data_cached():
         # 各種数値カラムのパースとNaN補完（一切の簡略化を禁止、個別に明示的に実行）
         if 'result_pop' in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet['result_pop'] = pd.to_numeric(raw_dataframe_from_sheet['result_pop'], errors='coerce')
+            # 🌟 【修正】NaNを0で埋めることでint変換時のエラーを先回り防止
+            raw_dataframe_from_sheet['result_pop'] = raw_dataframe_from_sheet['result_pop'].fillna(0)
             
         if 'f3f' in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet['f3f'] = pd.to_numeric(raw_dataframe_from_sheet['f3f'], errors='coerce')
@@ -288,7 +292,7 @@ def parse_time_string_to_seconds(str_time_input):
         return 0.0
 
 # ==============================================================================
-# 5. 係数マスタ詳細定義 (1ミリも削らず、小数点第二位までの初期設計を100%復元)
+# 5. 係数マスタ詳細定義 (1ミリも削らず、100%物理復元)
 # ==============================================================================
 
 # 🌟 【 NameError修正：マスタ名称の統一 】 🌟
@@ -368,7 +372,7 @@ with tab_main_analysis:
 
     st.header("🚀 レース解析 & 自動保存システム")
     
-    # 🌟 サイドバーによる解析詳細条件の入力 (冗長記述の徹底)
+    # 🌟 サイドバーによる解析詳細条件の入力 (1ミリも削らない冗長記述)
     with st.sidebar:
         st.title("解析条件設定")
         str_in_race_name_actual_f = st.text_input("解析対象レース名称")
@@ -487,7 +491,7 @@ with tab_main_analysis:
                     val_rank_pos_num_v6_agg_final_actual_f = int(match_rank_f_v65_agg_final_step_f.group(1)) if match_rank_f_v65_agg_final_step_f else 99
                     
                     str_suffix_v65_agg_final_f_f = str_line_v65_agg_f_raw[match_time_v65_agg_final_step_f.end():]
-                    list_pos_vals_found_v65_agg_final_f_f = re.findall(r'\b([1-2]?\d)\b', str_suffix_v65_agg_final_f_f)
+                    list_pos_vals_found_v65_agg_final_f_f = re.findall(r'\b([1-2]?\d)\b', str_suffix_v65_agg_final_f_f if 'str_suffix_v65_agg_final_f_f' in locals() else str_suffix_v65_agg_final_f_f)
                     val_final_4c_pos_v6_res_agg_final_actual_f = 7.0 
                     
                     if list_pos_vals_found_v65_agg_final_f_f:
@@ -523,7 +527,7 @@ with tab_main_analysis:
 
                 # --- 物理計算ループ物理復元工程 ---
                 list_new_sync_rows_tab1_v6_final = []
-                for entry_save_m_f in list_parsed_final_res_acc_v6_agg_actual_f:
+                for entry_save_m_f in list_final_parsed_results_acc_v6_agg_actual_f:
                     # 全計算変数を冒頭で独立物理初期化（NameError物理根絶）
                     str_line_v_step_f = entry_save_m_f["line"]
                     val_l_pos_v_step_f = entry_save_m_f["four_c_pos"]
@@ -575,7 +579,7 @@ with tab_main_analysis:
                     if val_l3f_gap_f >= 0.5: list_tags_f.append("🚀 アガリ優秀")
                     elif val_l3f_gap_f <= -1.0: list_tags_f.append("📉 失速大")
                     
-                    # 🌟 RTC指数の多段物理ステップ詳細計算 (p1-p10展開)
+                    # 🌟 RTC指数の多段物理ステップ計算
                     r_p1 = val_total_seconds_raw_v_f
                     r_p2 = (val_w_val_v_step_f - 56.0) * 0.1
                     r_p3 = val_in_trackidx_agg / 10.0
@@ -614,34 +618,46 @@ with tab_main_analysis:
                         st.success(f"✅ 解析・同期保存が物理的に完了しました。"); st.rerun()
 
 # ==============================================================================
-# 8. Tab 2: 馬別履歴詳細 & 個別メンテナンス (1350行規模・不具合根絶物理)
+# 8. Tab 2: 馬別履歴詳細 & 個別メンテナンス
 # ==============================================================================
 
 with tab_horse_history:
-    st.header("📊 馬別履歴詳細物理管理")
-    df_t2_f = get_db_data()
-    if not df_t2_f.empty:
-        c_t2_1, c_t2_2 = st.columns(2)
-        with c_t2_1: str_search_v = st.text_input("馬名物理検索", key="q_h_t2_f")
-        list_unique_h_t2 = sorted([str(x) for x in df_t2_f['name'].dropna().unique()])
-        with c_t2_2: target_h_v = st.selectbox("個別編集対象を選択", ["未選択"] + list_unique_h_t2)
+    st.header("📊 馬別履歴 & 買い条件詳細物理管理エンジン")
+    df_t2_source_v6 = get_db_data()
+    if not df_t2_source_v6.empty:
+        col_t2_f1, col_t2_f2 = st.columns([1, 1])
+        with col_t2_f1:
+            input_horse_search_q_v6 = st.text_input("馬名物理絞り込み検索", key="q_h_t2_v6")
         
-        if target_h_v != "未選択":
-            idx_found_v = df_t2_f[df_t2_f['name'] == target_h_v].index[-1]
-            with st.form("form_t2_f"):
-                new_m_v = st.text_area("解析メモ修正", value=df_t2_f.at[idx_found_v, 'memo'])
-                new_f_v = st.text_input("フラグ設定", value=df_t2_f.at[idx_found_v, 'next_buy_flag'])
-                if st.form_submit_button("DB同期実行"):
-                    df_t2_f.at[idx_found_v, 'memo'] = new_m_v
-                    df_t2_f.at[idx_found_v, 'next_buy_flag'] = new_f_v
-                    if safe_update(df_t2_f): st.success("更新成功"); st.rerun()
+        list_h_names_t2_pool = sorted([str(xn) for xn in df_t2_source_v6['name'].dropna().unique()])
+        with col_t2_f2:
+            val_sel_target_h_t2_v6 = st.selectbox("個別馬実績の物理修正対象馬を選択", ["未選択"] + list_h_names_t2_pool)
         
-        df_v_f = df_t2_f[df_t2_f['name'].str.contains(str_search_v, na=False)] if str_search_v else df_t2_f
-        df_v_formatted = df_v_f.copy()
+        if val_sel_target_h_t2_v6 != "未選択":
+            idx_list_t2_found = df_t2_source_v6[df_t2_source_v6['name'] == val_sel_target_h_t2_v6].index
+            target_idx_t2_f_actual = idx_list_t2_found[-1]
+            
+            with st.form("form_edit_h_t2_v6_agg"):
+                val_memo_t2_v6_cur = df_t2_source_v6.at[target_idx_t2_f_actual, 'memo'] if not pd.isna(df_t2_source_v6.at[target_idx_t2_f_actual, 'memo']) else ""
+                new_memo_t2_v6_val = st.text_area("解析評価メモの詳細物理修正", value=val_memo_t2_v6_cur)
+                val_flag_t2_v6_cur = df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag'] if not pd.isna(df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag']) else ""
+                new_flag_t2_v6_val = st.text_input("次走個別買いフラグ物理設定", value=val_flag_t2_v6_cur)
+                
+                if st.form_submit_button("同期保存実行"):
+                    df_t2_source_v6.at[target_idx_t2_f_actual, 'memo'] = new_memo_t2_v6_val
+                    df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag'] = new_flag_t2_v6_val
+                    if safe_update(df_t2_source_v6):
+                        st.success(f"【{val_sel_target_h_t2_v6}】同期成功"); st.rerun()
         
-        # 🌟 指示反映：関数名を完全に統一し、Line 829のエラーを物理排除
-        df_v_formatted['base_rtc'] = df_v_formatted['base_rtc'].apply(format_time_to_hmsf_string)
-        st.dataframe(df_v_formatted.sort_values("date", ascending=False), use_container_width=True)
+        df_t2_filtered_v6 = df_t2_source_v6[df_t2_source_v6['name'].str.contains(input_horse_search_q_v6, na=False)] if input_horse_search_q_v6 else df_t2_source_v6
+        df_t2_final_view_f_v6 = df_t2_filtered_v6.copy()
+        
+        # 🌟 指示反映：名称完全物理統一致。履歴表示の不沈工程。
+        df_t2_final_view_f_v6['base_rtc'] = df_t2_final_view_f_v6['base_rtc'].apply(format_time_to_hmsf_string)
+        st.dataframe(
+            df_t2_final_view_f_v6.sort_values("date", ascending=False)[["date", "name", "last_race", "base_rtc", "f3f", "l3f", "race_l3f", "load", "memo", "next_buy_flag"]], 
+            use_container_width=True
+        )
 
 # ==============================================================================
 # 9. Tab 3: レース実績物理管理
@@ -659,9 +675,23 @@ with tab_race_history:
                 for i_v, row_v in df_sub_v.iterrows():
                     c_grid_1, c_grid_2 = st.columns(2)
                     with c_grid_1:
-                        df_sub_v.at[i_v, 'result_pos'] = st.number_input(f"{row_v['name']} 着順", 0, 100, int(row_v['result_pos']), key=f"p_t3_{i_v}")
+                        # 🌟 安全な値の取得 (ValueError回避)
+                        val_pos_safe = 0
+                        if not pd.isna(row_v['result_pos']):
+                            try:
+                                val_pos_safe = int(row_v['result_pos'])
+                            except:
+                                val_pos_safe = 0
+                        df_sub_v.at[i_v, 'result_pos'] = st.number_input(f"{row_v['name']} 着順", 0, 100, val_pos_safe, key=f"p_t3_{i_v}")
                     with c_grid_2:
-                        df_sub_v.at[i_v, 'result_pop'] = st.number_input(f"{row_v['name']} 人気", 0, 100, int(row_v['result_pop']), key=f"pop_t3_{i_v}")
+                        # 🌟 安全な値の取得 (ValueError回避)
+                        val_pop_safe = 0
+                        if not pd.isna(row_v['result_pop']):
+                            try:
+                                val_pop_safe = int(row_v['result_pop'])
+                            except:
+                                val_pop_safe = 0
+                        df_sub_v.at[i_v, 'result_pop'] = st.number_input(f"{row_v['name']} 人気", 0, 100, val_pop_safe, key=f"pop_t3_{i_v}")
                 if st.form_submit_button("同期保存"):
                     for i_v, row_v in df_sub_v.iterrows(): 
                         df_t3_f.at[i_v, 'result_pos'] = row_v['result_pos']
@@ -682,26 +712,47 @@ with tab_simulator:
         list_h_names_v = sorted([str(x) for x in df_t4_f['name'].dropna().unique()])
         sel_multi_h = st.multiselect("対象馬を物理選択", list_h_names_v)
         sim_w_map = {}
+        sim_g_map = {}
+        sim_p_map = {}
+        
         if sel_multi_h:
             st.markdown("##### 📝 個別物理パラメータ入力")
             grid_sim = st.columns(min(len(sel_multi_h), 4))
             for i_h, h_i in enumerate(sel_multi_h):
                 with grid_sim[i_h % 4]:
+                    h_lat_data = df_t4_f[df_t4_f['name'] == h_i].iloc[-1]
+                    sim_g_map[h_i] = st.number_input(f"{h_i} 枠", 1, 18, value=1, key=f"g_sim_{h_i}")
+                    sim_p_map[h_i] = st.number_input(f"{h_i} 人気", 1, 18, value=int(h_lat_data['result_pop']) if not pd.isna(h_lat_data['result_pop']) else 10, key=f"p_sim_{h_i}")
                     sim_w_map[h_i] = st.number_input(f"{h_i} 斤量", 48.0, 62.0, 56.0, step=0.5, key=f"w_sim_{h_i}")
             
             c_sc_1, c_sc_2 = st.columns(2)
             with c_sc_1:
                 val_sim_course = st.selectbox("次走競馬場", list(MASTER_CONFIG_V65_TURF_LOAD_COEFFS.keys()))
                 val_sim_dist = st.selectbox("次走距離", list_dist_range_opts_actual_f if 'list_dist_range_opts_actual_f' in locals() else [1600], index=0)
+                opt_sim_track = st.radio("次走種別", ["芝", "ダート"], horizontal=True)
             with c_sc_2:
                 val_sim_cush = st.slider("想定クッション", 7.0, 12.0, 9.5)
                 val_sim_water = st.slider("想定含水率", 0.0, 30.0, 10.0)
 
             if st.button("🏁 物理シミュレーション実行"):
                 list_res_v = []
+                num_sim_total = len(sel_multi_h)
+                dict_styles = {"逃げ": 0, "先行": 0, "差し": 0, "追込": 0}
+                val_mean_l3f = df_t4_f['l3f'].mean()
+
                 for h_n_v in sel_multi_h:
                     df_h_v = df_t4_f[df_t4_f['name'] == h_n_v].sort_values("date")
                     df_l3_v = df_h_v.tail(3); list_conv_rtc_v = []
+                    
+                    val_avg_load_3r = df_l3_v['load'].mean()
+                    if val_avg_load_3r <= 3.5: style_l = "逃げ"
+                    elif val_avg_load_3r <= 7.0: style_l = "先行"
+                    elif val_avg_load_3r <= 11.0: style_l = "差し"
+                    else: style_l = "追込"
+                    dict_styles[style_l] += 1
+
+                    jam_label = "⚠️詰まり注意" if num_sim_total >= 15 and style_l in ["差し", "追込"] and sim_g_map[h_n_v] <= 4 else "-"
+                    
                     for idx_r, row_r in df_l3_v.iterrows():
                         # 🌟 冗長物理計算ステップ展開 (省略禁止)
                         p_w_v = 56.0
@@ -715,15 +766,21 @@ with tab_simulator:
                         sens_v = 0.15 if v_h_bw <= 440 else 0.08 if v_h_bw >= 500 else 0.1
                         w_diff_v = (sim_w_map[h_n_v] - p_w_v) * sens_v
                         
-                        v_step_rtc = (row_r['base_rtc'] + w_diff_v) / row_r['dist'] * val_sim_dist
+                        v_step1 = (row_r['base_rtc'] + w_diff_v)
+                        v_step2 = v_step1 / row_r['dist']
+                        v_step_rtc = v_step2 * val_sim_dist
                         list_conv_rtc_v.append(v_step_rtc)
                         
                     final_rtc_v = sum(list_conv_rtc_v) / len(list_conv_rtc_v) if list_conv_rtc_v else 0
-                    list_res_v.append({"馬名": h_n_v, "物理想定タイム": final_rtc_v, "メモ": df_h_v.iloc[-1]['memo']})
+                    
+                    list_res_v.append({
+                        "馬名": h_n_v, "脚質": style_l, "想定タイム": final_rtc_v, "渋滞": jam_label, "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo']
+                    })
                 
-                df_final_v = pd.DataFrame(list_res_v).sort_values("物理想定タイム")
-                df_final_v['物理想定タイム'] = df_final_v['物理想定タイム'].apply(format_time_to_hmsf_string)
-                st.table(df_final_v)
+                df_final_v = pd.DataFrame(list_res_v).sort_values("raw_rtc")
+                df_final_v['順位'] = range(1, len(df_final_v) + 1)
+                df_final_v['想定タイム'] = df_final_v['raw_rtc'].apply(format_time_to_hmsf_string)
+                st.table(df_final_v[["順位", "馬名", "脚質", "渋滞", "想定タイム", "解析メモ"]])
 
 # ==============================================================================
 # 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細 (冗長ロジック100%復元)
