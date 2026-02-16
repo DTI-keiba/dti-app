@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v6.8",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v6.9",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -291,7 +291,7 @@ def parse_time_string_to_seconds(str_time_input):
         return 0.0
 
 # ==============================================================================
-# 5. 係数マスタ詳細定義 (1ミリも削らず、100%物理復元)
+# 5. 係数マスタ詳細定義 (初期設計を1ミリも削らず、100%物理復元)
 # ==============================================================================
 
 # 🌟 【 NameError修正：マスタ名称の統一 】 🌟
@@ -573,7 +573,10 @@ with tab_main_analysis:
                     if val_r_rank_v_step_f <= 5:
                         if (str_determined_bias_label_f == "前有利" and val_l_pos_v_step_f >= 10.0) or (str_determined_bias_label_f == "後有利" and val_l_pos_v_step_f <= 3.0):
                             list_tags_f.append("💎💎 ﾊﾞｲｱｽ極限逆行" if val_field_size_f_f >= 16 else "💎 ﾊﾞｲｱｽ逆行"); flag_is_counter_f = True
-                    
+                    if not ((var_pace_label_res_f == "ハイペース" and str_determined_bias_label_f == "前有利") or (var_pace_label_res_f == "スローペース" and str_determined_bias_label_f == "後有利")):
+                        if var_pace_label_res_f == "ハイペース" and val_l_pos_v_step_f <= 3.0: list_tags_f.append("📉 激流被害" if val_field_size_f_f >= 14 else "🔥 展開逆行"); flag_is_counter_f = True
+                        elif var_pace_label_res_f == "スローペース" and val_l_pos_v_step_f >= 10.0 and (var_f3f_calc_res_f - val_l3f_indiv_v_f) > 1.5: list_tags_f.append("🔥 展開逆行"); flag_is_counter_f = True
+
                     val_l3f_gap_f = v65_final_manual_l3f - val_l3f_indiv_v_f
                     if val_l3f_gap_f >= 0.5: list_tags_f.append("🚀 アガリ優秀")
                     elif val_l3f_gap_f <= -1.0: list_tags_f.append("📉 失速大")
@@ -820,7 +823,7 @@ with tab_management:
         m_w_v = re.search(r'([4-6]\d\.\d)', str_n_v)
         indiv_w_v = float(m_w_v.group(1)) if m_w_v else 56.0
         
-        # 🌟 【指示反映】: バイアス、ペース、負荷の再計算ロジックを完全復元 (物理再計算済のテキスト除去)
+        # 🌟 【指示反映】: バイアス、ペース、負荷の再計算ロジックを完全復元
         bt_label_v = "フラット"; mx_field_v = 16
         if df_ctx_v is not None and not pd.isna(row_v['last_race']):
             rc_sub_v = df_ctx_v[df_ctx_v['last_race'] == row_v['last_race']]
@@ -842,12 +845,22 @@ with tab_management:
         elif ps_label_v == "スローペース" and bt_label_v != "後有利":
             val_computed_load_v = max(0.0, (val_rel_ratio_v - 0.4) * 2.0) * val_scale_v # 簡易復元
 
-        list_tags_v = [] # タグ再評価は既存ロジックが複雑なため、ここでは空リスト（または既存メモから抽出推奨だが、今回は物理計算値を優先）
+        list_tags_v = []
+        flag_is_counter_v = False
         
+        # 🌟 【修正完了】: 逆行評価タグの再判定ロジックを復元
+        if pos_v <= 5:
+            if (bt_label_v == "前有利" and l_pos_v >= 10.0) or (bt_label_v == "後有利" and l_pos_v <= 3.0):
+                list_tags_v.append("💎💎 ﾊﾞｲｱｽ極限逆行" if mx_field_v >= 16 else "💎 ﾊﾞｲｱｽ逆行"); flag_is_counter_v = True
+        
+        if not ((ps_label_v == "ハイペース" and bt_label_v == "前有利") or (ps_label_v == "スローペース" and bt_label_v == "後有利")):
+            if ps_label_v == "ハイペース" and l_pos_v <= 3.0: list_tags_v.append("📉 激流被害" if mx_field_v >= 14 else "🔥 展開逆行"); flag_is_counter_v = True
+            elif ps_label_v == "スローペース" and l_pos_v >= 10.0 and (f3f_v - l3f_v) > 1.5: list_tags_v.append("🔥 展開逆行"); flag_is_counter_v = True
+
         str_field_tag_v = "多" if mx_field_v >= 16 else "少" if mx_field_v <= 10 else "中"
 
-        # 🌟 【修正完了】: 「物理再計算済」の文言を削除し、本来のフォーマットで出力
-        mu_final_v = f"【{ps_label_v}/{bt_label_v}/負荷:{val_computed_load_v:.1f}({str_field_tag_v})/平】"
+        # 🌟 【修正完了】: 本来のフォーマットで出力 (物理再計算済のテキスト除去)
+        mu_final_v = f"【{ps_label_v}/{bt_label_v}/負荷:{val_computed_load_v:.1f}({str_field_tag_v})/平】{'/'.join(list_tags_v) if list_tags_v else '順境'}"
         
         return mu_final_v, str(row_v['next_buy_flag'])
 
