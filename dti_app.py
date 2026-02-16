@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v6.9",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v7.0",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -570,12 +570,19 @@ with tab_main_analysis:
                     
                     list_tags_f = []
                     flag_is_counter_f = False
+                    
+                    # 🌟 【指示反映】: 逆行評価タグの判定条件に着順制限（5着以内）を物理追加
                     if val_r_rank_v_step_f <= 5:
+                        # バイアス逆行判定
                         if (str_determined_bias_label_f == "前有利" and val_l_pos_v_step_f >= 10.0) or (str_determined_bias_label_f == "後有利" and val_l_pos_v_step_f <= 3.0):
                             list_tags_f.append("💎💎 ﾊﾞｲｱｽ極限逆行" if val_field_size_f_f >= 16 else "💎 ﾊﾞｲｱｽ逆行"); flag_is_counter_f = True
+                    
                     if not ((var_pace_label_res_f == "ハイペース" and str_determined_bias_label_f == "前有利") or (var_pace_label_res_f == "スローペース" and str_determined_bias_label_f == "後有利")):
-                        if var_pace_label_res_f == "ハイペース" and val_l_pos_v_step_f <= 3.0: list_tags_f.append("📉 激流被害" if val_field_size_f_f >= 14 else "🔥 展開逆行"); flag_is_counter_f = True
-                        elif var_pace_label_res_f == "スローペース" and val_l_pos_v_step_f >= 10.0 and (var_f3f_calc_res_f - val_l3f_indiv_v_f) > 1.5: list_tags_f.append("🔥 展開逆行"); flag_is_counter_f = True
+                        # 展開逆行判定（ここにも <= 5 の条件を追加）
+                        if var_pace_label_res_f == "ハイペース" and val_l_pos_v_step_f <= 3.0 and val_r_rank_v_step_f <= 5: 
+                            list_tags_f.append("📉 激流被害" if val_field_size_f_f >= 14 else "🔥 展開逆行"); flag_is_counter_f = True
+                        elif var_pace_label_res_f == "スローペース" and val_l_pos_v_step_f >= 10.0 and (var_f3f_calc_res_f - val_l3f_indiv_v_f) > 1.5 and val_r_rank_v_step_f <= 5: 
+                            list_tags_f.append("🔥 展開逆行"); flag_is_counter_f = True
 
                     val_l3f_gap_f = v65_final_manual_l3f - val_l3f_indiv_v_f
                     if val_l3f_gap_f >= 0.5: list_tags_f.append("🚀 アガリ優秀")
@@ -848,14 +855,18 @@ with tab_management:
         list_tags_v = []
         flag_is_counter_v = False
         
-        # 🌟 【修正完了】: 逆行評価タグの再判定ロジックを復元
+        # 🌟 【修正完了】: 逆行評価タグの判定条件に着順制限（5着以内）を物理追加
         if pos_v <= 5:
+            # バイアス逆行判定
             if (bt_label_v == "前有利" and l_pos_v >= 10.0) or (bt_label_v == "後有利" and l_pos_v <= 3.0):
                 list_tags_v.append("💎💎 ﾊﾞｲｱｽ極限逆行" if mx_field_v >= 16 else "💎 ﾊﾞｲｱｽ逆行"); flag_is_counter_v = True
         
         if not ((ps_label_v == "ハイペース" and bt_label_v == "前有利") or (ps_label_v == "スローペース" and bt_label_v == "後有利")):
-            if ps_label_v == "ハイペース" and l_pos_v <= 3.0: list_tags_v.append("📉 激流被害" if mx_field_v >= 14 else "🔥 展開逆行"); flag_is_counter_v = True
-            elif ps_label_v == "スローペース" and l_pos_v >= 10.0 and (f3f_v - l3f_v) > 1.5: list_tags_v.append("🔥 展開逆行"); flag_is_counter_v = True
+            # 展開逆行判定（ここにも <= 5 の条件を追加）
+            if ps_label_v == "ハイペース" and l_pos_v <= 3.0 and pos_v <= 5: 
+                list_tags_v.append("📉 激流被害" if mx_field_v >= 14 else "🔥 展開逆行"); flag_is_counter_v = True
+            elif ps_label_v == "スローペース" and l_pos_v >= 10.0 and (f3f_v - l3f_v) > 1.5 and pos_v <= 5: 
+                list_tags_v.append("🔥 展開逆行"); flag_is_counter_v = True
 
         str_field_tag_v = "多" if mx_field_v >= 16 else "少" if mx_field_v <= 10 else "中"
 
