@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v7.0",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v7.2",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -712,7 +712,7 @@ with tab_race_history:
             st.dataframe(df_t3_fmt, use_container_width=True)
 
 # ==============================================================================
-# 10. Tab 4: シミュレーター詳細工程 (物理記述極大化)
+# 10. Tab 4: シミュレーター詳細工程 (物理記述極大化 + 買い目機能完全復元)
 # ==============================================================================
 
 with tab_simulator:
@@ -746,13 +746,35 @@ with tab_simulator:
 
             if st.button("🏁 物理シミュレーション実行"):
                 list_res_v = []
+                num_sim_total = len(sel_multi_h)
+                
+                # 🌟 【復活】展開予想ロジック
+                dict_styles = {"逃げ": 0, "先行": 0, "差し": 0, "追込": 0}
+                val_mean_l3f = df_t4_f['l3f'].mean()
+
+                # まず脚質を集計
+                for h_n_v in sel_multi_h:
+                    df_h_temp = df_t4_f[df_t4_f['name'] == h_n_v].sort_values("date")
+                    df_l3_temp = df_h_temp.tail(3)
+                    val_avg_load_3r = df_l3_temp['load'].mean()
+                    if val_avg_load_3r <= 3.5: style_l = "逃げ"
+                    elif val_avg_load_3r <= 7.0: style_l = "先行"
+                    elif val_avg_load_3r <= 11.0: style_l = "差し"
+                    else: style_l = "追込"
+                    dict_styles[style_l] += 1
+
+                # 展開判定
+                str_sim_pace = "ミドルペース"
+                if dict_styles["逃げ"] >= 2 or (dict_styles["逃げ"] + dict_styles["先行"]) >= num_sim_total * 0.6:
+                    str_sim_pace = "ハイペース傾向"
+                elif dict_styles["逃げ"] == 0 and dict_styles["先行"] <= 1:
+                    str_sim_pace = "スローペース傾向"
+
+                # メインループ
                 for h_n_v in sel_multi_h:
                     df_h_v = df_t4_f[df_t4_f['name'] == h_n_v].sort_values("date")
                     df_l3_v = df_h_v.tail(3); list_conv_rtc_v = []
                     
-                    num_sim_total = len(sel_multi_h)
-                    
-                    # 脚質判定
                     val_avg_load_3r = df_l3_v['load'].mean()
                     if val_avg_load_3r <= 3.5: style_l = "逃げ"
                     elif val_avg_load_3r <= 7.0: style_l = "先行"
@@ -762,7 +784,6 @@ with tab_simulator:
                     jam_label = "⚠️詰まり注意" if num_sim_total >= 15 and style_l in ["差し", "追込"] and sim_g_map[h_n_v] <= 4 else "-"
 
                     for idx_r, row_r in df_l3_v.iterrows():
-                        # 🌟 冗長物理計算ステップ展開 (省略禁止)
                         p_w_v = 56.0
                         wm_v = re.search(r'([4-6]\d\.\d)', str(row_r['notes']))
                         if wm_v: p_w_v = float(wm_v.group(1))
@@ -782,13 +803,67 @@ with tab_simulator:
                     final_rtc_v = sum(list_conv_rtc_v) / len(list_conv_rtc_v) if list_conv_rtc_v else 0
                     
                     list_res_v.append({
-                        "馬名": h_n_v, "脚質": style_l, "想定タイム": final_rtc_v, "渋滞": jam_label, "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo']
+                        "馬名": h_n_v, "脚質": style_l, "想定タイム": final_rtc_v, "渋滞": jam_label, 
+                        "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo']
                     })
                 
-                df_final_v = pd.DataFrame(list_res_v).sort_values("raw_rtc")
+                df_final_v = pd.DataFrame(list_res_v)
+                
+                # 🌟 【復活】シナジーRTC計算と印の付与
+                val_sim_p_mult = 1.5 if num_sim_total >= 15 else 1.0
+                def compute_synergy(row):
+                    adj = 0.0
+                    if "ハイ" in str_sim_pace:
+                        if row['脚質'] in ["差し", "追込"]: adj = -0.2 * val_sim_p_mult
+                        elif row['脚質'] == "逃げ": adj = 0.2 * val_sim_p_mult
+                    elif "スロー" in str_sim_pace:
+                        if row['脚質'] in ["逃げ", "先行"]: adj = -0.2 * val_sim_p_mult
+                        elif row['脚質'] in ["差し", "追込"]: adj = 0.2 * val_sim_p_mult
+                    return row['raw_rtc'] + adj
+
+                df_final_v['synergy_rtc'] = df_final_v.apply(compute_synergy, axis=1)
+                df_final_v = df_final_v.sort_values("synergy_rtc")
                 df_final_v['順位'] = range(1, len(df_final_v) + 1)
+                
+                # 印の割り当て
+                df_final_v['役割'] = "-"
+                df_final_v.loc[df_final_v['順位'] == 1, '役割'] = "◎"
+                df_final_v.loc[df_final_v['順位'] == 2, '役割'] = "〇"
+                df_final_v.loc[df_final_v['順位'] == 3, '役割'] = "▲"
+                
+                # 妙味計算と★印
+                df_final_v['予想人気'] = df_final_v['馬名'].map(sim_p_map)
+                df_final_v['妙味スコア'] = df_final_v['予想人気'] - df_final_v['順位']
+                
+                df_bomb = df_final_v[df_final_v['順位'] > 1].sort_values("妙味スコア", ascending=False)
+                if not df_bomb.empty:
+                     df_final_v.loc[df_final_v['馬名'] == df_bomb.iloc[0]['馬名'], '役割'] = "★"
+
+                # 買い目推奨ボックス
+                st.markdown("---")
+                st.subheader(f"🏁 展開予想：{str_sim_pace} ({num_sim_total}頭立て)")
+                
+                fav_name = df_final_v[df_final_v['役割'] == "◎"].iloc[0]['馬名'] if not df_final_v[df_final_v['役割'] == "◎"].empty else ""
+                opp_name = df_final_v[df_final_v['役割'] == "〇"].iloc[0]['馬名'] if not df_final_v[df_final_v['役割'] == "〇"].empty else ""
+                bomb_name = df_final_v[df_final_v['役割'] == "★"].iloc[0]['馬名'] if not df_final_v[df_final_v['役割'] == "★"].empty else ""
+                
+                col_rec1, col_rec2 = st.columns(2)
+                with col_rec1:
+                    if fav_name and opp_name:
+                        st.info(f"**🎯 馬連・ワイド 1点勝負**\n\n◎ {fav_name} － 〇 {opp_name}")
+                with col_rec2:
+                    if fav_name and bomb_name:
+                        st.warning(f"**💣 妙味狙いワイド 1点**\n\n◎ {fav_name} － ★ {bomb_name}")
+
                 df_final_v['想定タイム'] = df_final_v['raw_rtc'].apply(format_time_to_hmsf_string)
-                st.table(df_final_v[["順位", "馬名", "脚質", "渋滞", "想定タイム", "解析メモ"]])
+                
+                # ハイライト表示
+                def highlight_role(row):
+                    if row['役割'] == '◎': return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
+                    if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+
+                st.table(df_final_v[["役割", "順位", "馬名", "脚質", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
 # 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細 (冗長ロジック100%復元)
@@ -798,7 +873,6 @@ with tab_trends:
     st.header("📈 馬場トレンド詳細物理統計")
     df_t5_f = get_db_data()
     if not df_t5_f.empty:
-        # 🌟 指示反映：マスタ名称の不一致を物理解消しました
         sel_c_v = st.selectbox("トレンド競馬場指定", list(MASTER_CONFIG_V65_TURF_LOAD_COEFFS.keys()), key="tc_v5_final")
         tdf_v = df_t5_f[df_t5_f['course'] == sel_c_v].sort_values("date")
         if not tdf_v.empty:
