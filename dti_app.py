@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v7.8",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v7.9",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -581,7 +581,6 @@ with tab_main_analysis:
                                 val_total_seconds_raw_v_f = float_dec_f
                                 break
                     
-                    # 絶対防護壁の発動（中止・大敗・空欄馬を最下位へ物理排除）
                     if val_total_seconds_raw_v_f <= 0.0:
                         val_total_seconds_raw_v_f = 999.0
                     
@@ -630,7 +629,6 @@ with tab_main_analysis:
                     if val_l3f_gap_f >= 0.5: list_tags_f.append("🚀 アガリ優秀")
                     elif val_l3f_gap_f <= -1.0: list_tags_f.append("📉 失速大")
                     
-                    # 🌟 RTC指数の多段物理ステップ計算
                     r_p1 = val_total_seconds_raw_v_f
                     r_p2 = (val_w_val_v_step_f - 56.0) * 0.1
                     r_p3 = val_in_trackidx_agg / 10.0
@@ -767,7 +765,22 @@ with tab_simulator:
                 with grid_sim[i_h % 4]:
                     h_lat_data = df_t4_f[df_t4_f['name'] == h_i].iloc[-1]
                     sim_g_map[h_i] = st.number_input(f"{h_i} 枠", 1, 18, value=1, key=f"g_sim_{h_i}")
-                    sim_p_map[h_i] = st.number_input(f"{h_i} 人気", 1, 18, value=int(h_lat_data['result_pop']) if not pd.isna(h_lat_data['result_pop']) else 10, key=f"p_sim_{h_i}")
+                    
+                    # 🌟 【究極の修正】人気の安全取得 (StreamlitValueBelowMinError絶対防護壁)
+                    val_raw_pop_sim_f = 10
+                    if not pd.isna(h_lat_data['result_pop']):
+                        try:
+                            val_raw_pop_sim_f = int(h_lat_data['result_pop'])
+                        except:
+                            val_raw_pop_sim_f = 10
+                    
+                    val_safe_pop_sim_f = val_raw_pop_sim_f
+                    if val_safe_pop_sim_f < 1:
+                        val_safe_pop_sim_f = 1
+                    if val_safe_pop_sim_f > 18:
+                        val_safe_pop_sim_f = 18
+                        
+                    sim_p_map[h_i] = st.number_input(f"{h_i} 人気", 1, 18, value=val_safe_pop_sim_f, key=f"p_sim_{h_i}")
                     sim_w_map[h_i] = st.number_input(f"{h_i} 斤量", 48.0, 62.0, 56.0, step=0.5, key=f"w_sim_{h_i}")
             
             c_sc_1, c_sc_2 = st.columns(2)
