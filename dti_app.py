@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v7.5",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v7.6",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -50,7 +50,7 @@ ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL = [
     "result_pop", 
     "next_buy_flag",
     "track_week",
-    "race_type"  # 🌟 【新機能】瞬発力戦/持続力戦を記録する物理カラムを追加
+    "race_type"  # 瞬発力戦/持続力戦を記録する物理カラム
 ]
 
 # ==============================================================================
@@ -152,9 +152,6 @@ def get_db_data_cached():
         
         # 🌟 最重要：三段階詳細ソートロジック
         # データベースを解析と予測に最適な順序で物理的に整列させます。
-        # 第一優先：実施日（最新順）
-        # 第二優先：レース名（アルファベット・五十音順）
-        # 第三優先：着順（1着から順に）
         raw_dataframe_from_sheet = raw_dataframe_from_sheet.sort_values(
             by=["date", "last_race", "result_pos"], 
             ascending=[False, True, True]
@@ -243,7 +240,6 @@ def safe_update(df_sync_target):
             conn.update(data=df_sync_target)
             
             # 🌟 重要：書き込み成功後、直ちにアプリ内のキャッシュを強制的に抹消。
-            # これを怠ると、シートが更新されても画面上のデータが変わらない「同期不全」が起きます。
             st.cache_data.clear()
             
             return True
@@ -333,7 +329,7 @@ tab_main_analysis, tab_horse_history, tab_race_history, tab_simulator, tab_trend
 ])
 
 # ==============================================================================
-# 7. Tab 1: 解析・保存セクション (解析ボタン＆プレビューフロー完全実装)
+# 7. Tab 1: 解析・保存セクション (不具合完全排除・全ロジック非省略)
 # ==============================================================================
 
 with tab_main_analysis:
@@ -406,7 +402,7 @@ with tab_main_analysis:
         var_pace_label_res_f = "ミドルペース"
         var_pace_gap_res_f = 0.0
         
-        # 🌟 【新機能】道中ラップ（瞬発力/持続力）解析用変数の初期化
+        # 🌟 道中ラップ（瞬発力/持続力）解析用変数の初期化
         str_race_type_eval_f = "不明"
         var_mid_laps_avg_f = 0.0
         
@@ -415,7 +411,7 @@ with tab_main_analysis:
             list_converted_laps_f = [float(x) for x in list_found_laps_f]
                 
             if len(list_converted_laps_f) >= 3:
-                # 前後3Fのペース判定ロジック（既存維持）
+                # 前後3Fのペース判定ロジック
                 var_f3f_calc_res_f = list_converted_laps_f[0] + list_converted_laps_f[1] + list_converted_laps_f[2]
                 var_l3f_calc_res_f = list_converted_laps_f[-3] + list_converted_laps_f[-2] + list_converted_laps_f[-1]
                 var_pace_gap_res_f = var_f3f_calc_res_f - var_l3f_calc_res_f
@@ -429,21 +425,18 @@ with tab_main_analysis:
                 else:
                     var_pace_label_res_f = "ミドルペース"
                 
-                # 🌟 【新機能追加】中間のラップを抽出し、瞬発力戦か持続力戦かを物理的に判定
+                # 🌟 中間のラップを抽出し、瞬発力戦か持続力戦かを物理的に判定
                 var_total_laps_count_f = len(list_converted_laps_f)
                 if var_total_laps_count_f > 6:
-                    # 1F〜3Fと、ラスト3Fを除いた「間のラップ」を抽出
                     list_mid_laps_f = list_converted_laps_f[3:-3]
                     var_mid_laps_sum_f = sum(list_mid_laps_f)
                     var_mid_laps_avg_f = var_mid_laps_sum_f / len(list_mid_laps_f)
                     
-                    # 中間ラップの平均が11.9秒以上なら道中が緩んだ「瞬発力戦」と判定
                     if var_mid_laps_avg_f >= 11.9:
                         str_race_type_eval_f = "瞬発力戦"
                     else:
                         str_race_type_eval_f = "持続力戦"
                 else:
-                    # 1200m以下の短距離は中間ラップが存在しないため「持続力戦」と定義
                     str_race_type_eval_f = "持続力戦"
                     
                 st.success(f"ラップ解析成功: 前3F {var_f3f_calc_res_f:.1f} / 後3F {var_l3f_calc_res_f:.1f} ({var_pace_label_res_f}) / 展開: {str_race_type_eval_f}")
@@ -466,14 +459,16 @@ with tab_main_analysis:
         else:
             st.session_state.state_tab1_preview_is_active_f = True
 
-    # 🌟 解析プレビュー詳細セクション (1200行規模を維持する非省略記述)
+    # 🌟 解析プレビュー詳細セクション
     if st.session_state.state_tab1_preview_is_active_f == True:
         st.markdown("##### ⚖️ 解析プレビュー（物理抽出結果の確認・修正）")
-        # 🌟 ヘッダー行を物理的に除外する安全ガード
+        
+        # 🌟 【修正】最下位馬を救済するため、文字数制限を「15」から「5」に大幅緩和
         list_validated_lines_preview = []
         for l in str_input_raw_jra_results_f.strip().split('\n'):
             line_str = l.strip()
-            if len(line_str) <= 15: continue
+            if len(line_str) <= 5: continue # 短い行（中止など）も拾うように修正
+            
             # ヘッダー行に含まれるキーワードがある場合はスキップ
             if "騎手" in line_str and "着差" in line_str: continue
             if "タイム" in line_str and "コーナー" in line_str: continue
@@ -504,13 +499,12 @@ with tab_main_analysis:
 
         # 🌟 最終物理計算および物理同期保存プロセス
         if st.button("🚀 この内容で物理確定しスプレッドシートへ強制同期"):
-            # 🌟 【指示反映：不具合物理根絶ガード】
             v65_final_race_name = str_in_race_name_actual_f
             v65_final_race_date = val_in_race_date_actual_f
             v65_final_course_name = sel_in_course_name_actual_f
             v65_final_dist_m = val_in_dist_actual_actual_f
             v65_final_manual_l3f = val_in_manual_l3f_v6_agg_actual_final
-            v75_final_race_type = str_race_type_eval_f  # 新機能用の変数クローン
+            v75_final_race_type = str_race_type_eval_f
             
             if not v65_final_race_name:
                 st.error("レース名称が未入力です。詳細物理入力を完了してください。")
@@ -519,14 +513,17 @@ with tab_main_analysis:
                 for idx_row_v65_agg_f, row_item_v65_agg_f in df_analysis_preview_actual_f.iterrows():
                     str_line_v65_agg_f_raw = row_item_v65_agg_f["raw_line"]
                     
-                    match_time_v65_agg_final_step_f = re.search(r'(\d{1,2}:\d{2}\.\d)', str_line_v65_agg_f_raw)
-                    if not match_time_v65_agg_final_step_f:
-                        continue
+                    # 🌟 【修正】タイム表記（1分未満含む）を拾う。見つからなくても「スキップ」せず続行し、最下位馬を救済。
+                    match_time_v65_agg_final_step_f = re.search(r'(\d{1,2}:\d{2}\.\d|\d{2}\.\d)', str_line_v65_agg_f_raw)
                     
-                    match_rank_f_v65_agg_final_step_f = re.match(r'^(\d{1,2})', str_line_v65_agg_f_raw)
+                    # 着順の抽出も少し柔軟に
+                    match_rank_f_v65_agg_final_step_f = re.search(r'(?:^|\s)(\d{1,2})(?:\s|着)', str_line_v65_agg_f_raw)
                     val_rank_pos_num_v6_agg_final_actual_f = int(match_rank_f_v65_agg_final_step_f.group(1)) if match_rank_f_v65_agg_final_step_f else 99
                     
-                    str_suffix_v65_agg_final_f_f = str_line_v65_agg_f_raw[match_time_v65_agg_final_step_f.end():]
+                    str_suffix_v65_agg_final_f_f = str_line_v65_agg_f_raw
+                    if match_time_v65_agg_final_step_f:
+                        str_suffix_v65_agg_final_f_f = str_line_v65_agg_f_raw[match_time_v65_agg_final_step_f.end():]
+                        
                     list_pos_vals_found_v65_agg_final_f_f = re.findall(r'\b([1-2]?\d)\b', str_suffix_v65_agg_final_f_f)
                     val_final_4c_pos_v6_res_agg_final_actual_f = 7.0 
                     
@@ -564,18 +561,25 @@ with tab_main_analysis:
                 # --- 物理計算ループ物理復元工程 ---
                 list_new_sync_rows_tab1_v6_final = []
                 for entry_save_m_f in list_final_parsed_results_acc_v6_agg_actual_f:
-                    # 全計算変数を冒頭で独立物理初期化（NameError物理根絶）
+                    # 全計算変数を冒頭で独立物理初期化
                     str_line_v_step_f = entry_save_m_f["line"]
                     val_l_pos_v_step_f = entry_save_m_f["four_c_pos"]
                     val_r_rank_v_step_f = entry_save_m_f["res_pos"]
                     val_w_val_v_step_f = entry_save_m_f["weight"] 
-                    str_horse_body_weight_f_def_f = "" # 物理初期化完遂
+                    str_horse_body_weight_f_def_f = "" 
                     
-                    m_time_obj_v_step_f = re.search(r'(\d{1,2}:\d{2}\.\d)', str_line_v_step_f)
-                    str_time_val_v_f = m_time_obj_v_step_f.group(1)
-                    val_m_comp_v_f = float(str_time_val_v_f.split(':')[0])
-                    val_s_comp_v_f = float(str_time_val_v_f.split(':')[1])
-                    val_total_seconds_raw_v_f = val_m_comp_v_f * 60 + val_s_comp_v_f
+                    # 🌟 【修正】タイム非記載でも0.0を代入して続行する安全措置
+                    m_time_obj_v_step_f = re.search(r'(\d{1,2}:\d{2}\.\d|\d{2}\.\d)', str_line_v_step_f)
+                    if m_time_obj_v_step_f:
+                        str_time_val_v_f = m_time_obj_v_step_f.group(1)
+                        if ":" in str_time_val_v_f:
+                            val_m_comp_v_f = float(str_time_val_v_f.split(':')[0])
+                            val_s_comp_v_f = float(str_time_val_v_f.split(':')[1])
+                            val_total_seconds_raw_v_f = val_m_comp_v_f * 60 + val_s_comp_v_f
+                        else:
+                            val_total_seconds_raw_v_f = float(str_time_val_v_f)
+                    else:
+                        val_total_seconds_raw_v_f = 0.0 # タイムなしの馬の救済
                     
                     match_bw_raw_v_f = re.search(r'(\d{3})kg', str_line_v_step_f)
                     if match_bw_raw_v_f:
@@ -608,14 +612,11 @@ with tab_main_analysis:
                     list_tags_f = []
                     flag_is_counter_f = False
                     
-                    # 🌟 逆行評価タグの判定条件に着順制限（5着以内）を物理維持
                     if val_r_rank_v_step_f <= 5:
-                        # バイアス逆行判定
                         if (str_determined_bias_label_f == "前有利" and val_l_pos_v_step_f >= 10.0) or (str_determined_bias_label_f == "後有利" and val_l_pos_v_step_f <= 3.0):
                             list_tags_f.append("💎💎 ﾊﾞｲｱｽ極限逆行" if val_field_size_f_f >= 16 else "💎 ﾊﾞｲｱｽ逆行"); flag_is_counter_f = True
                     
                     if not ((var_pace_label_res_f == "ハイペース" and str_determined_bias_label_f == "前有利") or (var_pace_label_res_f == "スローペース" and str_determined_bias_label_f == "後有利")):
-                        # 展開逆行判定（5着以内条件維持）
                         if var_pace_label_res_f == "ハイペース" and val_l_pos_v_step_f <= 3.0 and val_r_rank_v_step_f <= 5: 
                             list_tags_f.append("📉 激流被害" if val_field_size_f_f >= 14 else "🔥 展開逆行"); flag_is_counter_f = True
                         elif var_pace_label_res_f == "スローペース" and val_l_pos_v_step_f >= 10.0 and (var_f3f_calc_res_f - val_l3f_indiv_v_f) > 1.5 and val_r_rank_v_step_f <= 5: 
@@ -639,10 +640,8 @@ with tab_main_analysis:
                     val_final_rtc_v = r_p1 - r_p2 - r_p3 - r_p4 - r_p5 + val_in_bias_slider_agg - r_p8 - r_p9 + r_p10
 
                     str_field_tag_f = "多" if val_field_size_f_f >= 16 else "少" if val_field_size_f_f <= 10 else "中"
-                    # 🌟 【機能追加】 メモにも瞬発/持続の種別を残す
                     str_final_memo_f = f"【{var_pace_label_res_f}({v75_final_race_type})/{str_determined_bias_label_f}/負荷:{val_computed_load_score_f:.1f}({str_field_tag_f})/平】{'/'.join(list_tags_f) if list_tags_f else '順境'}"
 
-                    # 🌟 【機能追加】race_typeを保存する
                     list_new_sync_rows_tab1_v6_final.append({
                         "name": entry_save_m_f["name"], "base_rtc": val_final_rtc_v, 
                         "last_race": v65_final_race_name, "course": v65_final_course_name, "dist": v65_final_dist_m, 
@@ -701,7 +700,6 @@ with tab_horse_history:
         df_t2_filtered_v6 = df_t2_source_v6[df_t2_source_v6['name'].str.contains(input_horse_search_q_v6, na=False)] if input_horse_search_q_v6 else df_t2_source_v6
         df_t2_final_view_f_v6 = df_t2_filtered_v6.copy()
         
-        # 🌟 指示反映：履歴表示の不沈工程。race_typeを追加。
         df_t2_final_view_f_v6['base_rtc'] = df_t2_final_view_f_v6['base_rtc'].apply(format_time_to_hmsf_string)
         st.dataframe(
             df_t2_final_view_f_v6.sort_values("date", ascending=False)[["date", "name", "last_race", "track_week", "race_type", "base_rtc", "f3f", "l3f", "race_l3f", "load", "memo", "next_buy_flag"]], 
@@ -745,7 +743,7 @@ with tab_race_history:
             st.dataframe(df_t3_fmt[["name", "notes", "track_week", "race_type", "base_rtc", "f3f", "l3f", "race_l3f", "result_pos", "result_pop"]], use_container_width=True)
 
 # ==============================================================================
-# 10. Tab 4: シミュレーター詳細工程 (物理記述極大化 + 買い目機能完全復元 + 新展開予想)
+# 10. Tab 4: シミュレーター詳細工程
 # ==============================================================================
 
 with tab_simulator:
@@ -782,17 +780,13 @@ with tab_simulator:
                 num_sim_total = len(sel_multi_h)
                 
                 dict_styles = {"逃げ": 0, "先行": 0, "差し": 0, "追込": 0}
-                # 🌟 【新機能】展開（瞬発/持続）の集計辞書
                 dict_race_types_v75 = {"瞬発力": 0, "持続力": 0, "自在": 0}
-                
                 dict_horse_pref_type_v75 = {}
 
-                # まず脚質と【得意展開】を集計
                 for h_n_v in sel_multi_h:
                     df_h_temp = df_t4_f[df_t4_f['name'] == h_n_v].sort_values("date")
                     df_l3_temp = df_h_temp.tail(3)
                     
-                    # 脚質
                     val_avg_load_3r = df_l3_temp['load'].mean()
                     if val_avg_load_3r <= 3.5: style_l = "逃げ"
                     elif val_avg_load_3r <= 7.0: style_l = "先行"
@@ -800,7 +794,6 @@ with tab_simulator:
                     else: style_l = "追込"
                     dict_styles[style_l] += 1
                     
-                    # 🌟 得意展開の抽出（5着以内に好走したレースの種別をカウント）
                     val_count_shunpatsu_v75 = 0
                     val_count_jizoku_v75 = 0
                     for idx_p, row_p in df_h_temp.iterrows():
@@ -819,19 +812,16 @@ with tab_simulator:
                     dict_horse_pref_type_v75[h_n_v] = str_pref_race_type_v75
                     dict_race_types_v75[str_pref_race_type_v75] += 1
 
-                # 展開判定（ペース）
                 str_sim_pace = "ミドルペース"
                 if dict_styles["逃げ"] >= 2 or (dict_styles["逃げ"] + dict_styles["先行"]) >= num_sim_total * 0.6:
                     str_sim_pace = "ハイペース傾向"
                 elif dict_styles["逃げ"] == 0 and dict_styles["先行"] <= 1:
                     str_sim_pace = "スローペース傾向"
                     
-                # 🌟 【新機能】展開判定（瞬発戦 vs 持続戦）メンバー構成から自動予測
-                str_sim_race_type_forecast_v75 = "瞬発力戦" # デフォルト
+                str_sim_race_type_forecast_v75 = "瞬発力戦"
                 if dict_race_types_v75["持続力"] > dict_race_types_v75["瞬発力"]:
                     str_sim_race_type_forecast_v75 = "持続力戦"
 
-                # メインループ
                 for h_n_v in sel_multi_h:
                     df_h_v = df_t4_f[df_t4_f['name'] == h_n_v].sort_values("date")
                     df_l3_v = df_h_v.tail(3); list_conv_rtc_v = []
@@ -845,7 +835,6 @@ with tab_simulator:
                     jam_label = "⚠️詰まり注意" if num_sim_total >= 15 and style_l in ["差し", "追込"] and sim_g_map[h_n_v] <= 4 else "-"
 
                     for idx_r, row_r in df_l3_v.iterrows():
-                        # 🌟 冗長物理計算ステップ展開 (省略禁止)
                         p_w_v = 56.0
                         wm_v = re.search(r'([4-6]\d\.\d)', str(row_r['notes']))
                         if wm_v: p_w_v = float(wm_v.group(1))
@@ -872,11 +861,9 @@ with tab_simulator:
                 
                 df_final_v = pd.DataFrame(list_res_v)
                 
-                # 🌟 シナジーRTC計算と印の付与（展開・瞬発持続のダブル補正）
                 val_sim_p_mult = 1.5 if num_sim_total >= 15 else 1.0
                 def compute_synergy(row):
                     adj = 0.0
-                    # ペース補正
                     if "ハイ" in str_sim_pace:
                         if row['脚質'] in ["差し", "追込"]: adj -= 0.2 * val_sim_p_mult
                         elif row['脚質'] == "逃げ": adj += 0.2 * val_sim_p_mult
@@ -884,7 +871,6 @@ with tab_simulator:
                         if row['脚質'] in ["逃げ", "先行"]: adj -= 0.2 * val_sim_p_mult
                         elif row['脚質'] in ["差し", "追込"]: adj += 0.2 * val_sim_p_mult
                     
-                    # 🌟 【新機能】瞬発力/持続力の適性シナジー補正（予測展開と得意展開が一致すればボーナス）
                     if str_sim_race_type_forecast_v75 == "瞬発力戦":
                         if row['得意展開'] == "瞬発力": adj -= 0.15
                         elif row['得意展開'] == "持続力": adj += 0.15
@@ -898,13 +884,11 @@ with tab_simulator:
                 df_final_v = df_final_v.sort_values("synergy_rtc")
                 df_final_v['順位'] = range(1, len(df_final_v) + 1)
                 
-                # 印の割り当て
                 df_final_v['役割'] = "-"
                 df_final_v.loc[df_final_v['順位'] == 1, '役割'] = "◎"
                 df_final_v.loc[df_final_v['順位'] == 2, '役割'] = "〇"
                 df_final_v.loc[df_final_v['順位'] == 3, '役割'] = "▲"
                 
-                # 妙味計算と★印
                 df_final_v['予想人気'] = df_final_v['馬名'].map(sim_p_map)
                 df_final_v['妙味スコア'] = df_final_v['予想人気'] - df_final_v['順位']
                 
@@ -912,7 +896,6 @@ with tab_simulator:
                 if not df_bomb.empty:
                      df_final_v.loc[df_final_v['馬名'] == df_bomb.iloc[0]['馬名'], '役割'] = "★"
 
-                # 買い目推奨ボックス
                 st.markdown("---")
                 st.subheader(f"🏁 展開予想：{str_sim_pace} × {str_sim_race_type_forecast_v75} ({num_sim_total}頭立て)")
                 
@@ -930,24 +913,21 @@ with tab_simulator:
 
                 df_final_v['想定タイム'] = df_final_v['raw_rtc'].apply(format_time_to_hmsf_string)
                 
-                # ハイライト表示
                 def highlight_role(row):
                     if row['役割'] == '◎': return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
                     if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
-                # 🌟 カラムに得意展開を追加
                 st.table(df_final_v[["役割", "順位", "馬名", "脚質", "得意展開", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
-# 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細 (冗長ロジック100%復元)
+# 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細
 # ==============================================================================
 
 with tab_trends:
     st.header("📈 馬場トレンド詳細物理統計")
     df_t5_f = get_db_data()
     if not df_t5_f.empty:
-        # 🌟 指示反映：マスタ名称の不一致を物理解消しました
         sel_c_v = st.selectbox("トレンド競馬場指定", list(MASTER_CONFIG_V65_TURF_LOAD_COEFFS.keys()), key="tc_v5_final")
         tdf_v = df_t5_f[df_t5_f['course'] == sel_c_v].sort_values("date")
         if not tdf_v.empty:
@@ -961,25 +941,21 @@ with tab_management:
     df_t6_f = get_db_data()
     
     def update_eval_tags_verbose_logic_final_step(row_v, df_ctx_v=None):
-        """【完全復元】再解析詳細冗長物理ロジック (一切の省略禁止)"""
         m_r_v = str(row_v['memo']) if not pd.isna(row_v['memo']) else ""
         def to_f_v(v_in):
             try: return float(v_in) if not pd.isna(v_in) else 0.0
             except: return 0.0
         
-        # 物理変数の全ステップ展開記述
         f3f_v = to_f_v(row_v['f3f'])
         l3f_v = to_f_v(row_v['l3f'])
         pos_v = to_f_v(row_v['result_pos'])
         l_pos_v = to_f_v(row_v['load'])
         rtc_v = to_f_v(row_v['base_rtc'])
         
-        # 物理再抽出詳細
         str_n_v = str(row_v['notes'])
         m_w_v = re.search(r'([4-6]\d\.\d)', str_n_v)
         indiv_w_v = float(m_w_v.group(1)) if m_w_v else 56.0
         
-        # 🌟 【指示反映】: バイアス、ペース、負荷の再計算ロジックを完全復元
         bt_label_v = "フラット"; mx_field_v = 16
         if df_ctx_v is not None and not pd.isna(row_v['last_race']):
             rc_sub_v = df_ctx_v[df_ctx_v['last_race'] == row_v['last_race']]
@@ -995,23 +971,19 @@ with tab_management:
         val_rel_ratio_v = l_pos_v / mx_field_v
         val_scale_v = mx_field_v / 16.0
         val_computed_load_v = 0.0
-        # 簡易計算（既存メモのキーワード依存）
         if ps_label_v == "ハイペース" and bt_label_v != "前有利":
-            val_computed_load_v = max(0.0, (0.6 - val_rel_ratio_v) * 3.0) * val_scale_v # 簡易復元
+            val_computed_load_v = max(0.0, (0.6 - val_rel_ratio_v) * 3.0) * val_scale_v 
         elif ps_label_v == "スローペース" and bt_label_v != "後有利":
-            val_computed_load_v = max(0.0, (val_rel_ratio_v - 0.4) * 2.0) * val_scale_v # 簡易復元
+            val_computed_load_v = max(0.0, (val_rel_ratio_v - 0.4) * 2.0) * val_scale_v 
 
         list_tags_v = []
         flag_is_counter_v = False
         
-        # 🌟 【修正完了】: 逆行評価タグの判定条件に着順制限（5着以内）を物理追加
         if pos_v <= 5:
-            # バイアス逆行判定
             if (bt_label_v == "前有利" and l_pos_v >= 10.0) or (bt_label_v == "後有利" and l_pos_v <= 3.0):
                 list_tags_v.append("💎💎 ﾊﾞｲｱｽ極限逆行" if mx_field_v >= 16 else "💎 ﾊﾞｲｱｽ逆行"); flag_is_counter_v = True
         
         if not ((ps_label_v == "ハイペース" and bt_label_v == "前有利") or (ps_label_v == "スローペース" and bt_label_v == "後有利")):
-            # 展開逆行判定（ここにも <= 5 の条件を追加）
             if ps_label_v == "ハイペース" and l_pos_v <= 3.0 and pos_v <= 5: 
                 list_tags_v.append("📉 激流被害" if mx_field_v >= 14 else "🔥 展開逆行"); flag_is_counter_v = True
             elif ps_label_v == "スローペース" and l_pos_v >= 10.0 and (f3f_v - l3f_v) > 1.5 and pos_v <= 5: 
@@ -1019,18 +991,20 @@ with tab_management:
 
         str_field_tag_v = "多" if mx_field_v >= 16 else "少" if mx_field_v <= 10 else "中"
 
-        # 🌟 【修正完了】: 本来のフォーマットで出力 (物理再計算済のテキスト除去)
-        mu_final_v = f"【{ps_label_v}/{bt_label_v}/負荷:{val_computed_load_v:.1f}({str_field_tag_v})/平】{'/'.join(list_tags_v) if list_tags_v else '順境'}"
+        # 🌟 既存の race_type 抽出（なければ不明にする）
+        race_type_v = "不明"
+        match_type = re.search(r'\((瞬発力戦|持続力戦|不明)\)', m_r_v)
+        if match_type: race_type_v = match_type.group(1)
+
+        mu_final_v = f"【{ps_label_v}({race_type_v})/{bt_label_v}/負荷:{val_computed_load_v:.1f}({str_field_tag_v})/平】{'/'.join(list_tags_v) if list_tags_v else '順境'}"
         
         return mu_final_v, str(row_v['next_buy_flag'])
 
     if st.button("🔄 物理データベース全記録の再計算・物理同期"):
         st.cache_data.clear()
         latest_df_v = conn.read(ttl=0)
-        # カラム正規化
         for c_nm in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
             if c_nm not in latest_df_v.columns: latest_df_v[c_nm] = None
-        # 冗長物理スキャン
         for idx_sy, row_sy in latest_df_v.iterrows():
             m_res, f_res = update_eval_tags_verbose_logic_final_step(row_sy, latest_df_v)
             latest_df_v.at[idx_sy, 'memo'] = m_res
@@ -1039,7 +1013,6 @@ with tab_management:
 
     if not df_t6_f.empty:
         st.subheader("🛠️ 物理エディタ同期修正工程")
-        # 🌟 【機能追加】 エディタは全カラム表示されるため、自動的に track_week も編集可能になります
         edf_f_v = st.data_editor(df_t6_f.copy().assign(base_rtc=lambda x: x['base_rtc'].apply(format_time_to_hmsf_string)).sort_values("date", ascending=False), num_rows="dynamic", use_container_width=True)
         if st.button("💾 エディタ修正内容を同期確定保存"):
             sdf_f_v = edf_f_v.copy()
@@ -1055,7 +1028,6 @@ with tab_management:
                 if safe_update(df_t6_f[df_t6_f['last_race'] != tr_del_v]): st.rerun()
         with cd2_v:
             list_h_v = sorted([str(x) for x in df_t6_f['name'].dropna().unique()])
-            # 🌟 【指示反映】マルチセレクト形式による物理一括抹消を完全物理復元
             target_h_multi_v = st.multiselect("抹消対象馬物理選択 (複数可)", list_h_v)
             if target_h_multi_v and st.button(f"🚨 選択した{len(target_h_multi_v)}頭を物理抹消"):
                 if safe_update(df_t6_f[~df_t6_f['name'].isin(target_h_multi_v)]): st.rerun()
