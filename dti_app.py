@@ -372,7 +372,7 @@ with tab_main_analysis:
 
     st.header("🚀 レース解析 & 自動保存システム")
     
-    # 🌟 サイドバーによる解析詳細条件の入力 (1ミリも削らない冗長記述)
+    # 🌟 サイドバーによる解析詳細条件の入力
     with st.sidebar:
         st.title("解析条件設定")
         str_in_race_name_actual_f = st.text_input("解析対象レース名称")
@@ -402,7 +402,6 @@ with tab_main_analysis:
         var_pace_label_res_f = "ミドルペース"
         var_pace_gap_res_f = 0.0
         
-        # 🌟 道中ラップ（瞬発力/持続力）解析用変数の初期化
         str_race_type_eval_f = "不明"
         var_mid_laps_avg_f = 0.0
         
@@ -463,13 +462,13 @@ with tab_main_analysis:
     if st.session_state.state_tab1_preview_is_active_f == True:
         st.markdown("##### ⚖️ 解析プレビュー（物理抽出結果の確認・修正）")
         
-        # 🌟 【修正】最下位馬を救済するため、文字数制限を「15」から「5」に大幅緩和
         list_validated_lines_preview = []
         for l in str_input_raw_jra_results_f.strip().split('\n'):
             line_str = l.strip()
-            if len(line_str) <= 5: continue # 短い行（中止など）も拾うように修正
+            # 🌟 【修正】文字数制限を緩和し、最下位の短い行も読み取る
+            if len(line_str) <= 5: continue
             
-            # ヘッダー行に含まれるキーワードがある場合はスキップ
+            # ヘッダー行を物理的に除外する安全ガード
             if "騎手" in line_str and "着差" in line_str: continue
             if "タイム" in line_str and "コーナー" in line_str: continue
             if "着順" in line_str and "馬名" in line_str: continue
@@ -482,7 +481,8 @@ with tab_main_analysis:
             if not found_horse_names_p_f:
                 continue
                 
-            match_weight_p_f = re.search(r'\s([4-6]\d\.\d)\s', line_p_item_f)
+            # 🌟 【修正】B(ブリンカー)表記等があっても確実に数値を拾うため、前後の空白縛りを撤廃
+            match_weight_p_f = re.search(r'([4-6]\d\.\d)', line_p_item_f)
             val_weight_extracted_now_f = float(match_weight_p_f.group(1)) if match_weight_p_f else 56.0
             
             list_preview_table_buffer_f.append({
@@ -513,11 +513,10 @@ with tab_main_analysis:
                 for idx_row_v65_agg_f, row_item_v65_agg_f in df_analysis_preview_actual_f.iterrows():
                     str_line_v65_agg_f_raw = row_item_v65_agg_f["raw_line"]
                     
-                    # 🌟 【修正】タイム表記（1分未満含む）を拾う。見つからなくても「スキップ」せず続行し、最下位馬を救済。
-                    match_time_v65_agg_final_step_f = re.search(r'(\d{1,2}:\d{2}\.\d|\d{2}\.\d)', str_line_v65_agg_f_raw)
+                    # 🌟 【修正】タイム表記を厳格に戻し、斤量等の誤爆を物理的に阻止（NameError・論理エラーを根絶）
+                    match_time_v65_agg_final_step_f = re.search(r'(\d{1,2}:\d{2}\.\d)', str_line_v65_agg_f_raw)
                     
-                    # 着順の抽出も少し柔軟に
-                    match_rank_f_v65_agg_final_step_f = re.search(r'(?:^|\s)(\d{1,2})(?:\s|着)', str_line_v65_agg_f_raw)
+                    match_rank_f_v65_agg_final_step_f = re.match(r'(?:^|\s)(\d{1,2})(?:\s|着)', str_line_v65_agg_f_raw)
                     val_rank_pos_num_v6_agg_final_actual_f = int(match_rank_f_v65_agg_final_step_f.group(1)) if match_rank_f_v65_agg_final_step_f else 99
                     
                     str_suffix_v65_agg_final_f_f = str_line_v65_agg_f_raw
@@ -568,18 +567,15 @@ with tab_main_analysis:
                     val_w_val_v_step_f = entry_save_m_f["weight"] 
                     str_horse_body_weight_f_def_f = "" 
                     
-                    # 🌟 【修正】タイム非記載でも0.0を代入して続行する安全措置
-                    m_time_obj_v_step_f = re.search(r'(\d{1,2}:\d{2}\.\d|\d{2}\.\d)', str_line_v_step_f)
+                    # 🌟 【修正】正規表現を元に戻し、もしマッチしなければ安全に 0.0 を代入。
+                    m_time_obj_v_step_f = re.search(r'(\d{1,2}:\d{2}\.\d)', str_line_v_step_f)
                     if m_time_obj_v_step_f:
                         str_time_val_v_f = m_time_obj_v_step_f.group(1)
-                        if ":" in str_time_val_v_f:
-                            val_m_comp_v_f = float(str_time_val_v_f.split(':')[0])
-                            val_s_comp_v_f = float(str_time_val_v_f.split(':')[1])
-                            val_total_seconds_raw_v_f = val_m_comp_v_f * 60 + val_s_comp_v_f
-                        else:
-                            val_total_seconds_raw_v_f = float(str_time_val_v_f)
+                        val_m_comp_v_f = float(str_time_val_v_f.split(':')[0])
+                        val_s_comp_v_f = float(str_time_val_v_f.split(':')[1])
+                        val_total_seconds_raw_v_f = val_m_comp_v_f * 60 + val_s_comp_v_f
                     else:
-                        val_total_seconds_raw_v_f = 0.0 # タイムなしの馬の救済
+                        val_total_seconds_raw_v_f = 0.0 # タイムなし（中止・大差負け等）の馬の救済
                     
                     match_bw_raw_v_f = re.search(r'(\d{3})kg', str_line_v_step_f)
                     if match_bw_raw_v_f:
@@ -991,7 +987,6 @@ with tab_management:
 
         str_field_tag_v = "多" if mx_field_v >= 16 else "少" if mx_field_v <= 10 else "中"
 
-        # 🌟 既存の race_type 抽出（なければ不明にする）
         race_type_v = "不明"
         match_type = re.search(r'\((瞬発力戦|持続力戦|不明)\)', m_r_v)
         if match_type: race_type_v = match_type.group(1)
