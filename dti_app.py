@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v7.2",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v7.3",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -48,7 +48,8 @@ ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL = [
     "water", 
     "result_pos", 
     "result_pop", 
-    "next_buy_flag"
+    "next_buy_flag",
+    "track_week"  # 🌟 【機能追加】開催週カラムを物理追加
 ]
 
 # ==============================================================================
@@ -75,7 +76,7 @@ def get_db_data_cached():
             safety_initial_df = pd.DataFrame(columns=ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL)
             return safety_initial_df
         
-        # 🌟 全18カラムの存在チェックと強制的な一括補完（省略禁止・冗長記述の徹底）
+        # 🌟 全19カラムの存在チェックと強制的な一括補完（省略禁止・冗長記述の徹底）
         # シート上での手動削除や列の並べ替えによるクラッシュを物理的に防ぎます。
         if "name" not in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet["name"] = None
@@ -131,6 +132,10 @@ def get_db_data_cached():
         if "next_buy_flag" not in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet["next_buy_flag"] = None
             
+        # 🌟 【機能追加】開催週の存在チェックと強制補完
+        if "track_week" not in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet["track_week"] = 1.0
+            
         # データの型変換（一文字の妥協も許さない詳細なエラー対策）
         if 'date' in raw_dataframe_from_sheet.columns:
             # 日付型への安全な変換
@@ -185,6 +190,11 @@ def get_db_data_cached():
         if 'water' in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet['water'] = pd.to_numeric(raw_dataframe_from_sheet['water'], errors='coerce')
             raw_dataframe_from_sheet['water'] = raw_dataframe_from_sheet['water'].fillna(10.0)
+            
+        # 🌟 【機能追加】開催週の型変換と補完
+        if 'track_week' in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet['track_week'] = pd.to_numeric(raw_dataframe_from_sheet['track_week'], errors='coerce')
+            raw_dataframe_from_sheet['track_week'] = raw_dataframe_from_sheet['track_week'].fillna(1.0)
             
         # 全てのカラムが空である不正な行を物理的にクリーニング
         raw_dataframe_from_sheet = raw_dataframe_from_sheet.dropna(how='all')
@@ -604,6 +614,7 @@ with tab_main_analysis:
                     str_field_tag_f = "多" if val_field_size_f_f >= 16 else "少" if val_field_size_f_f <= 10 else "中"
                     str_final_memo_f = f"【{var_pace_label_res_f}/{str_determined_bias_label_f}/負荷:{val_computed_load_score_f:.1f}({str_field_tag_f})/平】{'/'.join(list_tags_f) if list_tags_f else '順境'}"
 
+                    # 🌟 【機能追加】開催週データを `track_week` として保存
                     list_new_sync_rows_tab1_v6_final.append({
                         "name": entry_save_m_f["name"], "base_rtc": val_final_rtc_v, 
                         "last_race": v65_final_race_name, "course": v65_final_course_name, "dist": v65_final_dist_m, 
@@ -613,7 +624,7 @@ with tab_main_analysis:
                         "load": val_l_pos_v_step_f, "memo": str_final_memo_f,
                         "date": v65_final_race_date.strftime("%Y-%m-%d"), "cushion": val_in_cushion_agg, 
                         "water": r_p7, "next_buy_flag": "★逆行狙い" if flag_is_counter_f else "", 
-                        "result_pos": val_r_rank_v_step_f
+                        "result_pos": val_r_rank_v_step_f, "track_week": val_in_week_num_agg
                     })
                 
                 if list_new_sync_rows_tab1_v6_final:
@@ -664,8 +675,9 @@ with tab_horse_history:
         
         # 🌟 指示反映：名称完全物理統一致。履歴表示の不沈工程。
         df_t2_final_view_f_v6['base_rtc'] = df_t2_final_view_f_v6['base_rtc'].apply(format_time_to_hmsf_string)
+        # 🌟 【機能追加】 表示カラムに track_week を追加
         st.dataframe(
-            df_t2_final_view_f_v6.sort_values("date", ascending=False)[["date", "name", "last_race", "base_rtc", "f3f", "l3f", "race_l3f", "load", "memo", "next_buy_flag"]], 
+            df_t2_final_view_f_v6.sort_values("date", ascending=False)[["date", "name", "last_race", "track_week", "base_rtc", "f3f", "l3f", "race_l3f", "load", "memo", "next_buy_flag"]], 
             use_container_width=True
         )
 
@@ -709,10 +721,11 @@ with tab_race_history:
                     if safe_update(df_t3_f): st.success("同期完了"); st.rerun()
             df_t3_fmt = df_sub_v.copy()
             df_t3_fmt['base_rtc'] = df_t3_fmt['base_rtc'].apply(format_time_to_hmsf_string)
-            st.dataframe(df_t3_fmt, use_container_width=True)
+            # 🌟 【機能追加】 表示カラムに track_week を追加
+            st.dataframe(df_t3_fmt[["name", "notes", "track_week", "base_rtc", "f3f", "l3f", "race_l3f", "result_pos", "result_pop"]], use_container_width=True)
 
 # ==============================================================================
-# 10. Tab 4: シミュレーター詳細工程 (物理記述極大化 + 買い目機能完全復元)
+# 10. Tab 4: シミュレーター詳細工程 (物理記述極大化 + 買い目機能完全復元 + load追加)
 # ==============================================================================
 
 with tab_simulator:
@@ -802,6 +815,7 @@ with tab_simulator:
                         
                     final_rtc_v = sum(list_conv_rtc_v) / len(list_conv_rtc_v) if list_conv_rtc_v else 0
                     
+                    # 🌟 【修正】: "load" (平均4角位置) を出力テーブルに追加 (過去の指示漏れ対応)
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo']
@@ -863,6 +877,7 @@ with tab_simulator:
                     if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
+                # 🌟 カラムにloadを追加
                 st.table(df_final_v[["役割", "順位", "馬名", "脚質", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
@@ -873,6 +888,7 @@ with tab_trends:
     st.header("📈 馬場トレンド詳細物理統計")
     df_t5_f = get_db_data()
     if not df_t5_f.empty:
+        # 🌟 指示反映：マスタ名称の不一致を物理解消しました
         sel_c_v = st.selectbox("トレンド競馬場指定", list(MASTER_CONFIG_V65_TURF_LOAD_COEFFS.keys()), key="tc_v5_final")
         tdf_v = df_t5_f[df_t5_f['course'] == sel_c_v].sort_values("date")
         if not tdf_v.empty:
@@ -965,6 +981,7 @@ with tab_management:
 
     if not df_t6_f.empty:
         st.subheader("🛠️ 物理エディタ同期修正工程")
+        # 🌟 【機能追加】 エディタは全カラム表示されるため、自動的に track_week も編集可能になります
         edf_f_v = st.data_editor(df_t6_f.copy().assign(base_rtc=lambda x: x['base_rtc'].apply(format_time_to_hmsf_string)).sort_values("date", ascending=False), num_rows="dynamic", use_container_width=True)
         if st.button("💾 エディタ修正内容を同期確定保存"):
             sdf_f_v = edf_f_v.copy()
