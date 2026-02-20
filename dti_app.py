@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v7.3",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v7.4",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -49,7 +49,7 @@ ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL = [
     "result_pos", 
     "result_pop", 
     "next_buy_flag",
-    "track_week"  # 🌟 【機能追加】開催週カラムを物理追加
+    "track_week"
 ]
 
 # ==============================================================================
@@ -132,7 +132,6 @@ def get_db_data_cached():
         if "next_buy_flag" not in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet["next_buy_flag"] = None
             
-        # 🌟 【機能追加】開催週の存在チェックと強制補完
         if "track_week" not in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet["track_week"] = 1.0
             
@@ -191,7 +190,6 @@ def get_db_data_cached():
             raw_dataframe_from_sheet['water'] = pd.to_numeric(raw_dataframe_from_sheet['water'], errors='coerce')
             raw_dataframe_from_sheet['water'] = raw_dataframe_from_sheet['water'].fillna(10.0)
             
-        # 🌟 【機能追加】開催週の型変換と補完
         if 'track_week' in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet['track_week'] = pd.to_numeric(raw_dataframe_from_sheet['track_week'], errors='coerce')
             raw_dataframe_from_sheet['track_week'] = raw_dataframe_from_sheet['track_week'].fillna(1.0)
@@ -452,7 +450,17 @@ with tab_main_analysis:
     # 🌟 解析プレビュー詳細セクション (1200行規模を維持する非省略記述)
     if st.session_state.state_tab1_preview_is_active_f == True:
         st.markdown("##### ⚖️ 解析プレビュー（物理抽出結果の確認・修正）")
-        list_validated_lines_preview = [l.strip() for l in str_input_raw_jra_results_f.split('\n') if len(l.strip()) > 15]
+        # 🌟 【修正】ヘッダー行を物理的に除外する安全ガードを追加
+        list_validated_lines_preview = []
+        for l in str_input_raw_jra_results_f.strip().split('\n'):
+            line_str = l.strip()
+            if len(line_str) <= 15: continue
+            # ヘッダー行に含まれるキーワードがある場合はスキップ
+            if "騎手" in line_str and "着差" in line_str: continue
+            if "タイム" in line_str and "コーナー" in line_str: continue
+            if "着順" in line_str and "馬名" in line_str: continue
+            
+            list_validated_lines_preview.append(line_str)
         
         list_preview_table_buffer_f = []
         for line_p_item_f in list_validated_lines_preview:
@@ -815,7 +823,6 @@ with tab_simulator:
                         
                     final_rtc_v = sum(list_conv_rtc_v) / len(list_conv_rtc_v) if list_conv_rtc_v else 0
                     
-                    # 🌟 【修正】: "load" (平均4角位置) を出力テーブルに追加 (過去の指示漏れ対応)
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo']
