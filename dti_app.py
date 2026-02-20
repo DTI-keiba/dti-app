@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v7.6",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v7.8",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -410,7 +410,6 @@ with tab_main_analysis:
             list_converted_laps_f = [float(x) for x in list_found_laps_f]
                 
             if len(list_converted_laps_f) >= 3:
-                # 前後3Fのペース判定ロジック
                 var_f3f_calc_res_f = list_converted_laps_f[0] + list_converted_laps_f[1] + list_converted_laps_f[2]
                 var_l3f_calc_res_f = list_converted_laps_f[-3] + list_converted_laps_f[-2] + list_converted_laps_f[-1]
                 var_pace_gap_res_f = var_f3f_calc_res_f - var_l3f_calc_res_f
@@ -424,7 +423,6 @@ with tab_main_analysis:
                 else:
                     var_pace_label_res_f = "ミドルペース"
                 
-                # 🌟 中間のラップを抽出し、瞬発力戦か持続力戦かを物理的に判定
                 var_total_laps_count_f = len(list_converted_laps_f)
                 if var_total_laps_count_f > 6:
                     list_mid_laps_f = list_converted_laps_f[3:-3]
@@ -465,7 +463,6 @@ with tab_main_analysis:
         list_validated_lines_preview = []
         for l in str_input_raw_jra_results_f.strip().split('\n'):
             line_str = l.strip()
-            # 🌟 【修正】文字数制限を緩和し、最下位の短い行も読み取る
             if len(line_str) <= 5: continue
             
             # ヘッダー行を物理的に除外する安全ガード
@@ -481,7 +478,6 @@ with tab_main_analysis:
             if not found_horse_names_p_f:
                 continue
                 
-            # 🌟 【修正】B(ブリンカー)表記等があっても確実に数値を拾うため、前後の空白縛りを撤廃
             match_weight_p_f = re.search(r'([4-6]\d\.\d)', line_p_item_f)
             val_weight_extracted_now_f = float(match_weight_p_f.group(1)) if match_weight_p_f else 56.0
             
@@ -513,12 +509,11 @@ with tab_main_analysis:
                 for idx_row_v65_agg_f, row_item_v65_agg_f in df_analysis_preview_actual_f.iterrows():
                     str_line_v65_agg_f_raw = row_item_v65_agg_f["raw_line"]
                     
-                    # 🌟 【修正】タイム表記を厳格に戻し、斤量等の誤爆を物理的に阻止（NameError・論理エラーを根絶）
-                    match_time_v65_agg_final_step_f = re.search(r'(\d{1,2}:\d{2}\.\d)', str_line_v65_agg_f_raw)
-                    
                     match_rank_f_v65_agg_final_step_f = re.match(r'(?:^|\s)(\d{1,2})(?:\s|着)', str_line_v65_agg_f_raw)
                     val_rank_pos_num_v6_agg_final_actual_f = int(match_rank_f_v65_agg_final_step_f.group(1)) if match_rank_f_v65_agg_final_step_f else 99
                     
+                    # 4角順位の抽出（タイムの直後から探すため、ここでタイムも探す）
+                    match_time_v65_agg_final_step_f = re.search(r'(\d{1,2})[:：](\d{2}\.\d)', str_line_v65_agg_f_raw)
                     str_suffix_v65_agg_final_f_f = str_line_v65_agg_f_raw
                     if match_time_v65_agg_final_step_f:
                         str_suffix_v65_agg_final_f_f = str_line_v65_agg_f_raw[match_time_v65_agg_final_step_f.end():]
@@ -560,22 +555,35 @@ with tab_main_analysis:
                 # --- 物理計算ループ物理復元工程 ---
                 list_new_sync_rows_tab1_v6_final = []
                 for entry_save_m_f in list_final_parsed_results_acc_v6_agg_actual_f:
-                    # 全計算変数を冒頭で独立物理初期化
                     str_line_v_step_f = entry_save_m_f["line"]
                     val_l_pos_v_step_f = entry_save_m_f["four_c_pos"]
                     val_r_rank_v_step_f = entry_save_m_f["res_pos"]
                     val_w_val_v_step_f = entry_save_m_f["weight"] 
                     str_horse_body_weight_f_def_f = "" 
                     
-                    # 🌟 【修正】正規表現を元に戻し、もしマッチしなければ安全に 0.0 を代入。
-                    m_time_obj_v_step_f = re.search(r'(\d{1,2}:\d{2}\.\d)', str_line_v_step_f)
+                    # 🌟 【究極の修正】タイムの絶対防護壁：いかなる例外も許さず、欠損馬には999.0のペナルティを課す
+                    m_time_obj_v_step_f = re.search(r'(\d{1,2})[:：](\d{2}\.\d)', str_line_v_step_f)
+                    val_total_seconds_raw_v_f = 0.0
+                    
                     if m_time_obj_v_step_f:
-                        str_time_val_v_f = m_time_obj_v_step_f.group(1)
-                        val_m_comp_v_f = float(str_time_val_v_f.split(':')[0])
-                        val_s_comp_v_f = float(str_time_val_v_f.split(':')[1])
+                        val_m_comp_v_f = float(m_time_obj_v_step_f.group(1))
+                        val_s_comp_v_f = float(m_time_obj_v_step_f.group(2))
                         val_total_seconds_raw_v_f = val_m_comp_v_f * 60 + val_s_comp_v_f
                     else:
-                        val_total_seconds_raw_v_f = 0.0 # タイムなし（中止・大差負け等）の馬の救済
+                        list_all_decimals_time_f = re.findall(r'(\d{2}\.\d)', str_line_v_step_f)
+                        flag_weight_skipped = False
+                        for str_dec_f in list_all_decimals_time_f:
+                            float_dec_f = float(str_dec_f)
+                            if not flag_weight_skipped and abs(float_dec_f - val_w_val_v_step_f) < 0.01:
+                                flag_weight_skipped = True
+                                continue
+                            if 50.0 <= float_dec_f <= 75.0:
+                                val_total_seconds_raw_v_f = float_dec_f
+                                break
+                    
+                    # 絶対防護壁の発動（中止・大敗・空欄馬を最下位へ物理排除）
+                    if val_total_seconds_raw_v_f <= 0.0:
+                        val_total_seconds_raw_v_f = 999.0
                     
                     match_bw_raw_v_f = re.search(r'(\d{3})kg', str_line_v_step_f)
                     if match_bw_raw_v_f:
