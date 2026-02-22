@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v8.2",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v8.5",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -50,8 +50,11 @@ ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL = [
     "result_pop", 
     "next_buy_flag",
     "track_week",
-    "race_type",  # 瞬発力戦/持続力戦を記録する物理カラム
-    "track_kind"  # 芝・ダートのトラック種別を記録する物理カラム
+    "race_type",  
+    "track_kind",
+    "raw_time",    
+    "track_idx",   
+    "bias_slider"  
 ]
 
 # ==============================================================================
@@ -78,7 +81,7 @@ def get_db_data_cached():
             safety_initial_df = pd.DataFrame(columns=ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL)
             return safety_initial_df
         
-        # 🌟 全21カラムの存在チェックと強制的な一括補完（省略禁止・冗長記述の徹底）
+        # 🌟 全24カラムの存在チェックと強制的な一括補完（省略禁止・冗長記述の徹底）
         # シート上での手動削除や列の並べ替えによるクラッシュを物理的に防ぎます。
         if "name" not in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet["name"] = None
@@ -141,7 +144,16 @@ def get_db_data_cached():
             raw_dataframe_from_sheet["race_type"] = "不明"
             
         if "track_kind" not in raw_dataframe_from_sheet.columns:
-            raw_dataframe_from_sheet["track_kind"] = "芝" # 過去データ救済デフォルト
+            raw_dataframe_from_sheet["track_kind"] = "芝" 
+            
+        if "raw_time" not in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet["raw_time"] = 0.0
+            
+        if "track_idx" not in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet["track_idx"] = 0.0
+            
+        if "bias_slider" not in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet["bias_slider"] = 0.0
             
         # データの型変換（一文字の妥協も許さない詳細なエラー対策）
         if 'date' in raw_dataframe_from_sheet.columns:
@@ -155,7 +167,6 @@ def get_db_data_cached():
             raw_dataframe_from_sheet['result_pos'] = raw_dataframe_from_sheet['result_pos'].fillna(0)
         
         # 🌟 最重要：三段階詳細ソートロジック
-        # データベースを解析と予測に最適な順序で物理的に整列させます。
         raw_dataframe_from_sheet = raw_dataframe_from_sheet.sort_values(
             by=["date", "last_race", "result_pos"], 
             ascending=[False, True, True]
@@ -197,6 +208,15 @@ def get_db_data_cached():
         if 'track_week' in raw_dataframe_from_sheet.columns:
             raw_dataframe_from_sheet['track_week'] = pd.to_numeric(raw_dataframe_from_sheet['track_week'], errors='coerce')
             raw_dataframe_from_sheet['track_week'] = raw_dataframe_from_sheet['track_week'].fillna(1.0)
+
+        if 'raw_time' in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet['raw_time'] = pd.to_numeric(raw_dataframe_from_sheet['raw_time'], errors='coerce').fillna(0.0)
+
+        if 'track_idx' in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet['track_idx'] = pd.to_numeric(raw_dataframe_from_sheet['track_idx'], errors='coerce').fillna(0.0)
+
+        if 'bias_slider' in raw_dataframe_from_sheet.columns:
+            raw_dataframe_from_sheet['bias_slider'] = pd.to_numeric(raw_dataframe_from_sheet['bias_slider'], errors='coerce').fillna(0.0)
             
         # 全てのカラムが空である不正な行を物理的にクリーニング
         raw_dataframe_from_sheet = raw_dataframe_from_sheet.dropna(how='all')
@@ -220,7 +240,6 @@ def safe_update(df_sync_target):
     スプレッドシートへ全データを書き戻すための最重要関数です。
     リトライ機能、ソート、インデックスリセット、キャッシュ強制クリアを完全に含みます。
     """
-    # 保存直前に、データの型、順序、整合性を1ミリの狂いもなく再定義します。
     if 'date' in df_sync_target.columns:
         if 'last_race' in df_sync_target.columns:
             if 'result_pos' in df_sync_target.columns:
@@ -232,6 +251,10 @@ def safe_update(df_sync_target):
                     by=["date", "last_race", "result_pos"], 
                     ascending=[False, True, True]
                 )
+                # 🌟 【究極の修正】Google Sheets側で日付が空欄になるバグを物理的に阻止。
+                # ソート完了後、書き込み直前に確実に「YYYY-MM-DD形式の文字列」に固定する。
+                df_sync_target['date'] = df_sync_target['date'].dt.strftime('%Y-%m-%d')
+                df_sync_target['date'] = df_sync_target['date'].fillna("")
     
     # 🌟 Google Sheets側の物理行との乖離を防ぐため、インデックスを再生成します。
     df_sync_target = df_sync_target.reset_index(drop=True)
@@ -240,16 +263,10 @@ def safe_update(df_sync_target):
     physical_max_attempts = 3
     for i_attempt_counter in range(physical_max_attempts):
         try:
-            # 🌟 現在のDataFrame状態で、スプレッドシートを完全に最新状態で上書き更新。
             conn.update(data=df_sync_target)
-            
-            # 🌟 重要：書き込み成功後、直ちにアプリ内のキャッシュを強制的に抹消。
             st.cache_data.clear()
-            
             return True
-            
         except Exception as e_sheet_save_critical:
-            # 失敗した場合は待機時間を設け、APIのリセットを待ってから再試行。
             failure_wait_duration = 5
             if i_attempt_counter < physical_max_attempts - 1:
                 st.warning(f"Google Sheetsとの同期に失敗しました(リトライ {i_attempt_counter+1}/3)... {failure_wait_duration}秒後に再実行します。")
@@ -266,18 +283,12 @@ def safe_update(df_sync_target):
 def format_time_to_hmsf_string(val_seconds_raw):
     """
     秒数を mm:ss.f 形式の文字列に詳細変換します。
-    表示上の視認性を高めるため、競馬のラップ形式を厳格に守り、簡略化を排除します。
     """
-    if val_seconds_raw is None:
-        return ""
-    if val_seconds_raw <= 0:
-        return ""
-    if pd.isna(val_seconds_raw):
-        return ""
-    if isinstance(val_seconds_raw, str):
-        return val_seconds_raw
+    if val_seconds_raw is None: return ""
+    if val_seconds_raw <= 0: return ""
+    if pd.isna(val_seconds_raw): return ""
+    if isinstance(val_seconds_raw, str): return val_seconds_raw
         
-    # 分と秒の物理的な分割計算（1ステップずつ実行）
     val_minutes_component = int(val_seconds_raw // 60)
     val_seconds_component = val_seconds_raw % 60
     return f"{val_minutes_component}:{val_seconds_component:04.1f}"
@@ -285,10 +296,8 @@ def format_time_to_hmsf_string(val_seconds_raw):
 def parse_time_string_to_seconds(str_time_input):
     """
     mm:ss.f 形式の文字列を秒数(float)にパースして戻します。
-    エディタで手動修正された文字列を計算用数値に戻すための、省略を許さない重要関数です。
     """
-    if str_time_input is None:
-        return 0.0
+    if str_time_input is None: return 0.0
     try:
         cleaned_time_string_val = str(str_time_input).strip()
         if ":" in cleaned_time_string_val:
@@ -355,11 +364,18 @@ with tab_main_analysis:
                 elif flag_pace_exists_pk:
                     label_reverse_type_final = "【🔥ペース逆行】"
                 
+                # 🌟 日付の文字列化
+                val_date_pk = row_pickup_item['date']
+                if not pd.isna(val_date_pk):
+                    if isinstance(val_date_pk, str): str_date_pk = val_date_pk
+                    else: str_date_pk = val_date_pk.strftime('%Y-%m-%d')
+                else: str_date_pk = ""
+
                 list_pickup_entries_final.append({
                     "馬名": row_pickup_item['name'], 
                     "逆行タイプ": label_reverse_type_final, 
                     "前走": row_pickup_item['last_race'],
-                    "日付": row_pickup_item['date'].strftime('%Y-%m-%d') if not pd.isna(row_pickup_item['date']) else "", 
+                    "日付": str_date_pk, 
                     "解析メモ": str_memo_val_item
                 })
         
@@ -402,7 +418,6 @@ with tab_main_analysis:
         var_l3f_calc_res_f = 0.0
         var_pace_label_res_f = "ミドルペース"
         var_pace_gap_res_f = 0.0
-        
         str_race_type_eval_f = "不明"
         var_mid_laps_avg_f = 0.0
         
@@ -429,11 +444,8 @@ with tab_main_analysis:
                     list_mid_laps_f = list_converted_laps_f[3:-3]
                     var_mid_laps_sum_f = sum(list_mid_laps_f)
                     var_mid_laps_avg_f = var_mid_laps_sum_f / len(list_mid_laps_f)
-                    
-                    if var_mid_laps_avg_f >= 11.9:
-                        str_race_type_eval_f = "瞬発力戦"
-                    else:
-                        str_race_type_eval_f = "持続力戦"
+                    if var_mid_laps_avg_f >= 11.9: str_race_type_eval_f = "瞬発力戦"
+                    else: str_race_type_eval_f = "持続力戦"
                 else:
                     str_race_type_eval_f = "持続力戦"
                     
@@ -464,22 +476,17 @@ with tab_main_analysis:
         for l in str_input_raw_jra_results_f.strip().split('\n'):
             line_str = l.strip()
             if len(line_str) <= 5: continue
-            
             if "騎手" in line_str and "着差" in line_str: continue
             if "タイム" in line_str and "コーナー" in line_str: continue
             if "着順" in line_str and "馬名" in line_str: continue
-            
             list_validated_lines_preview.append(line_str)
         
         list_preview_table_buffer_f = []
         for line_p_item_f in list_validated_lines_preview:
             found_horse_names_p_f = re.findall(r'([ァ-ヶー]{2,})', line_p_item_f)
-            if not found_horse_names_p_f:
-                continue
-                
+            if not found_horse_names_p_f: continue
             match_weight_p_f = re.search(r'([4-6]\d\.\d)', line_p_item_f)
             val_weight_extracted_now_f = float(match_weight_p_f.group(1)) if match_weight_p_f else 56.0
-            
             list_preview_table_buffer_f.append({
                 "馬名": found_horse_names_p_f[0], 
                 "斤量": val_weight_extracted_now_f, 
@@ -523,8 +530,7 @@ with tab_main_analysis:
                         list_valid_pos_buf_v6_agg_f_f_f = []
                         for p_str_v65_agg_f_f_f in list_pos_vals_found_v65_agg_final_f_f:
                             p_int_v65_agg_f_f_f = int(p_str_v65_agg_f_f_f)
-                            if p_int_v65_agg_f_f_f > 30: 
-                                break
+                            if p_int_v65_agg_f_f_f > 30: break
                             list_valid_pos_buf_v6_agg_f_f_f.append(float(p_int_v65_agg_f_f_f))
                         if list_valid_pos_buf_v6_agg_f_f_f:
                             val_final_4c_pos_v6_res_agg_final_actual_f = list_valid_pos_buf_v6_agg_f_f_f[-1]
@@ -650,7 +656,10 @@ with tab_main_analysis:
                         "water": r_p7, "next_buy_flag": "★逆行狙い" if flag_is_counter_f else "", 
                         "result_pos": val_r_rank_v_step_f, "track_week": val_in_week_num_agg,
                         "race_type": v75_final_race_type,
-                        "track_kind": v80_final_track_kind
+                        "track_kind": v80_final_track_kind,
+                        "raw_time": val_total_seconds_raw_v_f,
+                        "track_idx": val_in_trackidx_agg,
+                        "bias_slider": val_in_bias_slider_agg
                     })
                 
                 if list_new_sync_rows_tab1_v6_final:
@@ -664,7 +673,7 @@ with tab_main_analysis:
                         st.success(f"✅ 解析・同期保存が物理的に完了しました。"); st.rerun()
 
 # ==============================================================================
-# 8. Tab 2: 馬別履歴詳細 & 個別メンテナンス (完全版：track_kind編集追加)
+# 8. Tab 2: 馬別履歴詳細 & 個別メンテナンス
 # ==============================================================================
 
 with tab_horse_history:
@@ -689,7 +698,6 @@ with tab_horse_history:
                 val_flag_t2_v6_cur = df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag'] if not pd.isna(df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag']) else ""
                 new_flag_t2_v6_val = st.text_input("次走個別買いフラグ物理設定", value=val_flag_t2_v6_cur)
                 
-                # 🌟 【新機能】馬別履歴から芝・ダート（track_kind）を物理変更
                 val_kind_t2_v6_cur = str(df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind']) if not pd.isna(df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind']) else "芝"
                 if val_kind_t2_v6_cur not in ["芝", "ダート"]: val_kind_t2_v6_cur = "芝"
                 new_kind_t2_v6_val = st.selectbox("トラック種別物理設定 (芝/ダート)", ["芝", "ダート"], index=0 if val_kind_t2_v6_cur == "芝" else 1)
@@ -697,13 +705,15 @@ with tab_horse_history:
                 if st.form_submit_button("同期保存実行"):
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'memo'] = new_memo_t2_v6_val
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag'] = new_flag_t2_v6_val
-                    df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind'] = new_kind_t2_v6_val # 追加
+                    df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind'] = new_kind_t2_v6_val
                     if safe_update(df_t2_source_v6):
                         st.success(f"【{val_sel_target_h_t2_v6}】同期成功"); st.rerun()
         
         df_t2_filtered_v6 = df_t2_source_v6[df_t2_source_v6['name'].str.contains(input_horse_search_q_v6, na=False)] if input_horse_search_q_v6 else df_t2_source_v6
         df_t2_final_view_f_v6 = df_t2_filtered_v6.copy()
         
+        # 🌟 日付の文字列化
+        df_t2_final_view_f_v6['date'] = df_t2_final_view_f_v6['date'].apply(lambda x: x.strftime('%Y-%m-%d') if not pd.isna(x) else "")
         df_t2_final_view_f_v6['base_rtc'] = df_t2_final_view_f_v6['base_rtc'].apply(format_time_to_hmsf_string)
         st.dataframe(
             df_t2_final_view_f_v6.sort_values("date", ascending=False)[["date", "name", "last_race", "track_kind", "track_week", "race_type", "base_rtc", "f3f", "l3f", "race_l3f", "load", "memo", "next_buy_flag"]], 
@@ -711,7 +721,7 @@ with tab_horse_history:
         )
 
 # ==============================================================================
-# 9. Tab 3: レース実績物理管理 (完全版：track_kind一括編集追加)
+# 9. Tab 3: レース実績物理管理
 # ==============================================================================
 
 with tab_race_history:
@@ -724,7 +734,6 @@ with tab_race_history:
             df_sub_v = df_t3_f[df_t3_f['last_race'] == sel_r_v].copy()
             with st.form("form_race_res_t3_f"):
                 for i_v, row_v in df_sub_v.iterrows():
-                    # 🌟 【新機能】3カラムに拡張し、一括で芝・ダートを変更可能に
                     c_grid_1, c_grid_2, c_grid_3 = st.columns(3)
                     with c_grid_1:
                         val_pos_safe = 0
@@ -739,7 +748,6 @@ with tab_race_history:
                             except: val_pop_safe = 0
                         df_sub_v.at[i_v, 'result_pop'] = st.number_input(f"{row_v['name']} 人気", 0, 100, val_pop_safe, key=f"pop_t3_{i_v}")
                     with c_grid_3:
-                        # 🌟 レース別履歴から芝・ダート（track_kind）を物理変更
                         val_kind_safe = str(row_v.get('track_kind', '芝'))
                         if val_kind_safe not in ["芝", "ダート"]: val_kind_safe = "芝"
                         df_sub_v.at[i_v, 'track_kind'] = st.selectbox(f"{row_v['name']} 芝/ダート", ["芝", "ダート"], index=0 if val_kind_safe == "芝" else 1, key=f"k_t3_{i_v}")
@@ -748,7 +756,7 @@ with tab_race_history:
                     for i_v, row_v in df_sub_v.iterrows(): 
                         df_t3_f.at[i_v, 'result_pos'] = row_v['result_pos']
                         df_t3_f.at[i_v, 'result_pop'] = row_v['result_pop']
-                        df_t3_f.at[i_v, 'track_kind'] = row_v['track_kind'] # 追加
+                        df_t3_f.at[i_v, 'track_kind'] = row_v['track_kind']
                     if safe_update(df_t3_f): st.success("同期完了"); st.rerun()
             df_t3_fmt = df_sub_v.copy()
             df_t3_fmt['base_rtc'] = df_t3_fmt['base_rtc'].apply(format_time_to_hmsf_string)
@@ -778,10 +786,8 @@ with tab_simulator:
                     
                     val_raw_pop_sim_f = 10
                     if not pd.isna(h_lat_data['result_pop']):
-                        try:
-                            val_raw_pop_sim_f = int(h_lat_data['result_pop'])
-                        except:
-                            val_raw_pop_sim_f = 10
+                        try: val_raw_pop_sim_f = int(h_lat_data['result_pop'])
+                        except: val_raw_pop_sim_f = 10
                     val_safe_pop_sim_f = val_raw_pop_sim_f
                     if val_safe_pop_sim_f < 1: val_safe_pop_sim_f = 1
                     if val_safe_pop_sim_f > 18: val_safe_pop_sim_f = 18
@@ -821,16 +827,12 @@ with tab_simulator:
                     val_count_jizoku_v75 = 0
                     for idx_p, row_p in df_h_temp.iterrows():
                         if row_p['result_pos'] <= 5:
-                            if row_p['race_type'] == "瞬発力戦":
-                                val_count_shunpatsu_v75 += 1
-                            elif row_p['race_type'] == "持続力戦":
-                                val_count_jizoku_v75 += 1
+                            if row_p['race_type'] == "瞬発力戦": val_count_shunpatsu_v75 += 1
+                            elif row_p['race_type'] == "持続力戦": val_count_jizoku_v75 += 1
                     
                     str_pref_race_type_v75 = "自在"
-                    if val_count_shunpatsu_v75 > val_count_jizoku_v75:
-                        str_pref_race_type_v75 = "瞬発力"
-                    elif val_count_jizoku_v75 > val_count_shunpatsu_v75:
-                        str_pref_race_type_v75 = "持続力"
+                    if val_count_shunpatsu_v75 > val_count_jizoku_v75: str_pref_race_type_v75 = "瞬発力"
+                    elif val_count_jizoku_v75 > val_count_shunpatsu_v75: str_pref_race_type_v75 = "持続力"
                     
                     dict_horse_pref_type_v75[h_n_v] = str_pref_race_type_v75
                     dict_race_types_v75[str_pref_race_type_v75] += 1
@@ -925,7 +927,6 @@ with tab_simulator:
                         if row['得意展開'] == "持続力": adj -= 0.15
                         elif row['得意展開'] == "瞬発力": adj += 0.15
                         
-                    # 🌟 路線変更の初戦割引ペナルティ（指示反映：適性がある前提のため0.0に変更）
                     if row.get('is_cross', False):
                         adj += 0.0
 
@@ -993,39 +994,66 @@ with tab_management:
     
     def update_eval_tags_verbose_logic_final_step(row_v, df_ctx_v=None):
         m_r_v = str(row_v['memo']) if not pd.isna(row_v['memo']) else ""
-        def to_f_v(v_in):
-            try: return float(v_in) if not pd.isna(v_in) else 0.0
-            except: return 0.0
+        def to_f_v(v_in, default=0.0):
+            try: return float(v_in) if not pd.isna(v_in) else default
+            except: return default
         
         f3f_v = to_f_v(row_v['f3f'])
         l3f_v = to_f_v(row_v['l3f'])
+        race_l3f_v = to_f_v(row_v['race_l3f'])
         pos_v = to_f_v(row_v['result_pos'])
         l_pos_v = to_f_v(row_v['load'])
-        rtc_v = to_f_v(row_v['base_rtc'])
+        old_rtc_v = to_f_v(row_v['base_rtc'])
+        
+        raw_time_v = to_f_v(row_v.get('raw_time', 0.0))
+        track_idx_v = to_f_v(row_v.get('track_idx', 0.0))
+        bias_slider_v = to_f_v(row_v.get('bias_slider', 0.0))
+        cushion_v = to_f_v(row_v.get('cushion', 9.5), 9.5)
+        water_v = to_f_v(row_v.get('water', 10.0), 10.0)
+        dist_v = to_f_v(row_v.get('dist', 1600.0), 1600.0)
+        week_v = to_f_v(row_v.get('track_week', 1.0), 1.0)
         
         str_n_v = str(row_v['notes'])
         m_w_v = re.search(r'([4-6]\d\.\d)', str_n_v)
         indiv_w_v = float(m_w_v.group(1)) if m_w_v else 56.0
         
+        pace_gap_v = f3f_v - race_l3f_v
+        
         bt_label_v = "フラット"; mx_field_v = 16
         if df_ctx_v is not None and not pd.isna(row_v['last_race']):
             rc_sub_v = df_ctx_v[df_ctx_v['last_race'] == row_v['last_race']]
             mx_field_v = rc_sub_v['result_pos'].max() if not rc_sub_v.empty else 16
-            top3_v = rc_sub_v[rc_sub_v['result_pos'] <= 3].copy(); top3_v['load'] = top3_v['load'].fillna(7.0)
-            if not top3_v.empty: 
-                avg_l_v = top3_v['load'].mean()
-                if avg_l_v <= 4.0: bt_label_v = "前有利"
-                elif avg_l_v >= 10.0: bt_label_v = "後有利"
+            
+            top3_v = rc_sub_v[rc_sub_v['result_pos'] <= 3].copy()
+            top3_v['load'] = top3_v['load'].fillna(7.0)
+            
+            if not top3_v.empty:
+                outlier_mask = (top3_v['load'] >= 10.0) | (top3_v['load'] <= 3.0)
+                outliers = top3_v[outlier_mask]
+                
+                if len(outliers) == 1:
+                    core_top3 = top3_v[~outlier_mask]
+                    fourth_v = rc_sub_v[rc_sub_v['result_pos'] == 4].copy()
+                    fourth_v['load'] = fourth_v['load'].fillna(7.0)
+                    bias_calc_pool = pd.concat([core_top3, fourth_v])
+                else:
+                    bias_calc_pool = top3_v
+                    
+                if not bias_calc_pool.empty:
+                    avg_l_v = bias_calc_pool['load'].mean()
+                    if avg_l_v <= 4.0: bt_label_v = "前有利"
+                    elif avg_l_v >= 10.0: bt_label_v = "後有利"
         
         ps_label_v = "ハイペース" if "ハイ" in m_r_v else "スローペース" if "スロー" in m_r_v else "ミドルペース"
         
-        val_rel_ratio_v = l_pos_v / mx_field_v
+        val_rel_ratio_v = l_pos_v / mx_field_v if mx_field_v > 0 else l_pos_v / 16.0
         val_scale_v = mx_field_v / 16.0
         val_computed_load_v = 0.0
+        
         if ps_label_v == "ハイペース" and bt_label_v != "前有利":
-            val_computed_load_v = max(0.0, (0.6 - val_rel_ratio_v) * 3.0) * val_scale_v 
+            val_computed_load_v = max(0.0, (0.6 - val_rel_ratio_v) * abs(pace_gap_v) * 3.0) * val_scale_v 
         elif ps_label_v == "スローペース" and bt_label_v != "後有利":
-            val_computed_load_v = max(0.0, (val_rel_ratio_v - 0.4) * 2.0) * val_scale_v 
+            val_computed_load_v = max(0.0, (val_rel_ratio_v - 0.4) * abs(pace_gap_v) * 2.0) * val_scale_v 
 
         list_tags_v = []
         flag_is_counter_v = False
@@ -1042,13 +1070,26 @@ with tab_management:
 
         str_field_tag_v = "多" if mx_field_v >= 16 else "少" if mx_field_v <= 10 else "中"
 
-        race_type_v = "不明"
-        match_type = re.search(r'\((瞬発力戦|持続力戦|不明)\)', m_r_v)
-        if match_type: race_type_v = match_type.group(1)
+        race_type_v = str(row_v.get('race_type', '不明'))
+        if pd.isna(race_type_v) or race_type_v == 'nan': race_type_v = "不明"
 
         mu_final_v = f"【{ps_label_v}({race_type_v})/{bt_label_v}/負荷:{val_computed_load_v:.1f}({str_field_tag_v})/平】{'/'.join(list_tags_v) if list_tags_v else '順境'}"
         
-        return mu_final_v, str(row_v['next_buy_flag'])
+        new_rtc_v = old_rtc_v
+        if raw_time_v > 0.0 and raw_time_v != 999.0:
+            r_p1 = raw_time_v
+            r_p2 = (indiv_w_v - 56.0) * 0.1
+            r_p3 = track_idx_v / 10.0
+            r_p4 = val_computed_load_v / 10.0
+            r_p5 = (week_v - 1) * 0.05
+            r_p8 = (water_v - 10.0) * 0.05
+            r_p9 = (9.5 - cushion_v) * 0.1
+            r_p10 = (dist_v - 1600) * 0.0005
+            new_rtc_v = r_p1 - r_p2 - r_p3 - r_p4 - r_p5 + bias_slider_v - r_p8 - r_p9 + r_p10
+        elif raw_time_v == 999.0:
+            new_rtc_v = 999.0
+
+        return mu_final_v, str(row_v['next_buy_flag']), new_rtc_v
 
     if st.button("🔄 物理データベース全記録の再計算・物理同期"):
         st.cache_data.clear()
@@ -1056,14 +1097,22 @@ with tab_management:
         for c_nm in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
             if c_nm not in latest_df_v.columns: latest_df_v[c_nm] = None
         for idx_sy, row_sy in latest_df_v.iterrows():
-            m_res, f_res = update_eval_tags_verbose_logic_final_step(row_sy, latest_df_v)
+            m_res, f_res, rtc_res = update_eval_tags_verbose_logic_final_step(row_sy, latest_df_v)
             latest_df_v.at[idx_sy, 'memo'] = m_res
             latest_df_v.at[idx_sy, 'next_buy_flag'] = f_res
-        if safe_update(latest_df_v): st.success("全履歴の再解析成功"); st.rerun()
+            latest_df_v.at[idx_sy, 'base_rtc'] = rtc_res
+        if safe_update(latest_df_v): st.success("全履歴の真・再解析成功"); st.rerun()
 
     if not df_t6_f.empty:
         st.subheader("🛠️ 物理エディタ同期修正工程")
-        edf_f_v = st.data_editor(df_t6_f.copy().assign(base_rtc=lambda x: x['base_rtc'].apply(format_time_to_hmsf_string)).sort_values("date", ascending=False), num_rows="dynamic", use_container_width=True)
+        
+        # 🌟 表示用に日付を文字列化してエラー回避
+        df_for_editor = df_t6_f.copy()
+        df_for_editor['date'] = df_for_editor['date'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else "")
+        df_for_editor['base_rtc'] = df_for_editor['base_rtc'].apply(format_time_to_hmsf_string)
+        
+        edf_f_v = st.data_editor(df_for_editor.sort_values("date", ascending=False), num_rows="dynamic", use_container_width=True)
+        
         if st.button("💾 エディタ修正内容を同期確定保存"):
             sdf_f_v = edf_f_v.copy()
             sdf_f_v['base_rtc'] = sdf_f_v['base_rtc'].apply(parse_time_string_to_seconds)
