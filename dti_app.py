@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v8.5",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v9.0",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -251,8 +251,7 @@ def safe_update(df_sync_target):
                     by=["date", "last_race", "result_pos"], 
                     ascending=[False, True, True]
                 )
-                # 🌟 【究極の修正】Google Sheets側で日付が空欄になるバグを物理的に阻止。
-                # ソート完了後、書き込み直前に確実に「YYYY-MM-DD形式の文字列」に固定する。
+                # 🌟 Google Sheets側で日付が空欄になるバグを物理的に阻止。
                 df_sync_target['date'] = df_sync_target['date'].dt.strftime('%Y-%m-%d')
                 df_sync_target['date'] = df_sync_target['date'].fillna("")
     
@@ -364,7 +363,6 @@ with tab_main_analysis:
                 elif flag_pace_exists_pk:
                     label_reverse_type_final = "【🔥ペース逆行】"
                 
-                # 🌟 日付の文字列化
                 val_date_pk = row_pickup_item['date']
                 if not pd.isna(val_date_pk):
                     if isinstance(val_date_pk, str): str_date_pk = val_date_pk
@@ -455,7 +453,7 @@ with tab_main_analysis:
 
     with col_analysis_right_box: 
         st.markdown("##### 🐎 成績表詳細貼り付け")
-        str_input_raw_jra_results_f = st.text_area("JRA公式サイトの成績表をそのまま貼り付けてください", height=250)
+        str_input_raw_jra_results_f = text_area_val = st.text_area("JRA公式サイトの成績表をそのまま貼り付けてください", height=250)
 
     if 'state_tab1_preview_is_active_f' not in st.session_state:
         st.session_state.state_tab1_preview_is_active_f = False
@@ -712,7 +710,6 @@ with tab_horse_history:
         df_t2_filtered_v6 = df_t2_source_v6[df_t2_source_v6['name'].str.contains(input_horse_search_q_v6, na=False)] if input_horse_search_q_v6 else df_t2_source_v6
         df_t2_final_view_f_v6 = df_t2_filtered_v6.copy()
         
-        # 🌟 日付の文字列化
         df_t2_final_view_f_v6['date'] = df_t2_final_view_f_v6['date'].apply(lambda x: x.strftime('%Y-%m-%d') if not pd.isna(x) else "")
         df_t2_final_view_f_v6['base_rtc'] = df_t2_final_view_f_v6['base_rtc'].apply(format_time_to_hmsf_string)
         st.dataframe(
@@ -763,7 +760,7 @@ with tab_race_history:
             st.dataframe(df_t3_fmt[["name", "notes", "track_kind", "track_week", "race_type", "base_rtc", "f3f", "l3f", "race_l3f", "result_pos", "result_pop"]], use_container_width=True)
 
 # ==============================================================================
-# 10. Tab 4: シミュレーター詳細工程
+# 10. Tab 4: シミュレーター詳細工程 (v9.0 全走コース適性搭載版)
 # ==============================================================================
 
 with tab_simulator:
@@ -900,12 +897,49 @@ with tab_simulator:
                     c_dict_v = MASTER_CONFIG_V65_DIRT_LOAD_COEFFS if opt_sim_track == "ダート" else MASTER_CONFIG_V65_TURF_LOAD_COEFFS
                     final_rtc_v = val_avg_rtc_res + (c_dict_v.get(val_sim_course, 0.20) * (val_sim_dist/1600.0)) - (9.5 - val_sim_cush) * 0.1
                     
+                    # 🌟 【新機能】全走データに基づくコース適性の完全抽出とボーナス算出
+                    course_aptitude_bonus_v9 = 0.0
+                    aptitude_label_v9 = "初コース"
+                    
+                    df_same_course_v9 = df_h_v[df_h_v['course'] == val_sim_course]
+                    
+                    if not df_same_course_v9.empty and len(df_h_v) > 0:
+                        list_all_rtc_v9 = []
+                        for idx_all, r_all in df_h_v.iterrows():
+                            # ペナルティ値(999.0)や異常値を除外して純粋な能力を抽出
+                            if 0.0 < r_all['base_rtc'] < 300.0: 
+                                v_rtc_all = r_all['base_rtc'] / r_all['dist'] if r_all['dist'] > 0 else r_all['base_rtc'] / 1600.0
+                                list_all_rtc_v9.append(v_rtc_all * val_sim_dist)
+                        avg_all_rtc_v9 = sum(list_all_rtc_v9) / len(list_all_rtc_v9) if list_all_rtc_v9 else 0.0
+                        
+                        list_same_course_rtc_v9 = []
+                        for idx_same, r_same in df_same_course_v9.iterrows():
+                            if 0.0 < r_same['base_rtc'] < 300.0:
+                                v_rtc_same = r_same['base_rtc'] / r_same['dist'] if r_same['dist'] > 0 else r_same['base_rtc'] / 1600.0
+                                list_same_course_rtc_v9.append(v_rtc_same * val_sim_dist)
+                        avg_same_course_rtc_v9 = sum(list_same_course_rtc_v9) / len(list_same_course_rtc_v9) if list_same_course_rtc_v9 else 0.0
+                        
+                        if avg_all_rtc_v9 > 0.0 and avg_same_course_rtc_v9 > 0.0:
+                            aptitude_diff_v9 = avg_same_course_rtc_v9 - avg_all_rtc_v9
+                            course_aptitude_bonus_v9 = aptitude_diff_v9 * 0.5
+                            
+                            if aptitude_diff_v9 <= -0.5:
+                                aptitude_label_v9 = "🔥コース鬼"
+                            elif aptitude_diff_v9 <= -0.1:
+                                aptitude_label_v9 = "⭕適性あり"
+                            elif aptitude_diff_v9 >= 0.5:
+                                aptitude_label_v9 = "❌コース苦手"
+                            else:
+                                aptitude_label_v9 = "普通"
+                    
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "得意展開": dict_horse_pref_type_v75[h_n_v],
                         "路線変更": str_cross_label if flag_is_cross_surface else "-",
+                        "コース適性": aptitude_label_v9, # 🌟 新規カラム追加
                         "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo'],
-                        "is_cross": flag_is_cross_surface
+                        "is_cross": flag_is_cross_surface,
+                        "course_bonus": course_aptitude_bonus_v9 # 🌟 新規ボーナス追加
                     })
                 
                 df_final_v = pd.DataFrame(list_res_v)
@@ -929,6 +963,9 @@ with tab_simulator:
                         
                     if row.get('is_cross', False):
                         adj += 0.0
+                        
+                    # 🌟 コース適性ボーナスの適用
+                    adj += row.get('course_bonus', 0.0)
 
                     return row['raw_rtc'] + adj
 
@@ -970,7 +1007,8 @@ with tab_simulator:
                     if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
-                st.table(df_final_v[["役割", "順位", "馬名", "脚質", "得意展開", "路線変更", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
+                # 🌟 カラムに「コース適性」を追加
+                st.table(df_final_v[["役割", "順位", "馬名", "脚質", "得意展開", "路線変更", "コース適性", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
 # 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細
@@ -1106,7 +1144,6 @@ with tab_management:
     if not df_t6_f.empty:
         st.subheader("🛠️ 物理エディタ同期修正工程")
         
-        # 🌟 表示用に日付を文字列化してエラー回避
         df_for_editor = df_t6_f.copy()
         df_for_editor['date'] = df_for_editor['date'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else "")
         df_for_editor['base_rtc'] = df_for_editor['base_rtc'].apply(format_time_to_hmsf_string)
