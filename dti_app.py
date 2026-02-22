@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v8.1",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v8.2",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -664,7 +664,7 @@ with tab_main_analysis:
                         st.success(f"✅ 解析・同期保存が物理的に完了しました。"); st.rerun()
 
 # ==============================================================================
-# 8. Tab 2: 馬別履歴詳細 & 個別メンテナンス
+# 8. Tab 2: 馬別履歴詳細 & 個別メンテナンス (完全版：track_kind編集追加)
 # ==============================================================================
 
 with tab_horse_history:
@@ -689,9 +689,15 @@ with tab_horse_history:
                 val_flag_t2_v6_cur = df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag'] if not pd.isna(df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag']) else ""
                 new_flag_t2_v6_val = st.text_input("次走個別買いフラグ物理設定", value=val_flag_t2_v6_cur)
                 
+                # 🌟 【新機能】馬別履歴から芝・ダート（track_kind）を物理変更
+                val_kind_t2_v6_cur = str(df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind']) if not pd.isna(df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind']) else "芝"
+                if val_kind_t2_v6_cur not in ["芝", "ダート"]: val_kind_t2_v6_cur = "芝"
+                new_kind_t2_v6_val = st.selectbox("トラック種別物理設定 (芝/ダート)", ["芝", "ダート"], index=0 if val_kind_t2_v6_cur == "芝" else 1)
+                
                 if st.form_submit_button("同期保存実行"):
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'memo'] = new_memo_t2_v6_val
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag'] = new_flag_t2_v6_val
+                    df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind'] = new_kind_t2_v6_val # 追加
                     if safe_update(df_t2_source_v6):
                         st.success(f"【{val_sel_target_h_t2_v6}】同期成功"); st.rerun()
         
@@ -705,7 +711,7 @@ with tab_horse_history:
         )
 
 # ==============================================================================
-# 9. Tab 3: レース実績物理管理
+# 9. Tab 3: レース実績物理管理 (完全版：track_kind一括編集追加)
 # ==============================================================================
 
 with tab_race_history:
@@ -718,7 +724,8 @@ with tab_race_history:
             df_sub_v = df_t3_f[df_t3_f['last_race'] == sel_r_v].copy()
             with st.form("form_race_res_t3_f"):
                 for i_v, row_v in df_sub_v.iterrows():
-                    c_grid_1, c_grid_2 = st.columns(2)
+                    # 🌟 【新機能】3カラムに拡張し、一括で芝・ダートを変更可能に
+                    c_grid_1, c_grid_2, c_grid_3 = st.columns(3)
                     with c_grid_1:
                         val_pos_safe = 0
                         if not pd.isna(row_v['result_pos']):
@@ -731,10 +738,17 @@ with tab_race_history:
                             try: val_pop_safe = int(row_v['result_pop'])
                             except: val_pop_safe = 0
                         df_sub_v.at[i_v, 'result_pop'] = st.number_input(f"{row_v['name']} 人気", 0, 100, val_pop_safe, key=f"pop_t3_{i_v}")
+                    with c_grid_3:
+                        # 🌟 レース別履歴から芝・ダート（track_kind）を物理変更
+                        val_kind_safe = str(row_v.get('track_kind', '芝'))
+                        if val_kind_safe not in ["芝", "ダート"]: val_kind_safe = "芝"
+                        df_sub_v.at[i_v, 'track_kind'] = st.selectbox(f"{row_v['name']} 芝/ダート", ["芝", "ダート"], index=0 if val_kind_safe == "芝" else 1, key=f"k_t3_{i_v}")
+                        
                 if st.form_submit_button("同期保存"):
                     for i_v, row_v in df_sub_v.iterrows(): 
                         df_t3_f.at[i_v, 'result_pos'] = row_v['result_pos']
                         df_t3_f.at[i_v, 'result_pop'] = row_v['result_pop']
+                        df_t3_f.at[i_v, 'track_kind'] = row_v['track_kind'] # 追加
                     if safe_update(df_t3_f): st.success("同期完了"); st.rerun()
             df_t3_fmt = df_sub_v.copy()
             df_t3_fmt['base_rtc'] = df_t3_fmt['base_rtc'].apply(format_time_to_hmsf_string)
