@@ -13,7 +13,7 @@ from datetime import datetime
 
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
-    page_title="DTI Ultimate DB - The Absolute Master Edition v9.0",
+    page_title="DTI Ultimate DB - The Absolute Master Edition v10.0",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -760,7 +760,7 @@ with tab_race_history:
             st.dataframe(df_t3_fmt[["name", "notes", "track_kind", "track_week", "race_type", "base_rtc", "f3f", "l3f", "race_l3f", "result_pos", "result_pop"]], use_container_width=True)
 
 # ==============================================================================
-# 10. Tab 4: シミュレーター詳細工程 (v9.0 全走コース適性搭載版)
+# 10. Tab 4: シミュレーター詳細工程 (v10.0 究極新機能搭載版)
 # ==============================================================================
 
 with tab_simulator:
@@ -897,7 +897,6 @@ with tab_simulator:
                     c_dict_v = MASTER_CONFIG_V65_DIRT_LOAD_COEFFS if opt_sim_track == "ダート" else MASTER_CONFIG_V65_TURF_LOAD_COEFFS
                     final_rtc_v = val_avg_rtc_res + (c_dict_v.get(val_sim_course, 0.20) * (val_sim_dist/1600.0)) - (9.5 - val_sim_cush) * 0.1
                     
-                    # 🌟 【新機能】全走データに基づくコース適性の完全抽出とボーナス算出
                     course_aptitude_bonus_v9 = 0.0
                     aptitude_label_v9 = "初コース"
                     
@@ -906,7 +905,6 @@ with tab_simulator:
                     if not df_same_course_v9.empty and len(df_h_v) > 0:
                         list_all_rtc_v9 = []
                         for idx_all, r_all in df_h_v.iterrows():
-                            # ペナルティ値(999.0)や異常値を除外して純粋な能力を抽出
                             if 0.0 < r_all['base_rtc'] < 300.0: 
                                 v_rtc_all = r_all['base_rtc'] / r_all['dist'] if r_all['dist'] > 0 else r_all['base_rtc'] / 1600.0
                                 list_all_rtc_v9.append(v_rtc_all * val_sim_dist)
@@ -931,15 +929,47 @@ with tab_simulator:
                                 aptitude_label_v9 = "❌コース苦手"
                             else:
                                 aptitude_label_v9 = "普通"
+                                
+                    # 🌟 【新機能1 & 2】安定度指数（RTC偏差）と L3F乖離解析（鬼脚判定）
+                    list_all_rtc_std_v10 = []
+                    list_burst_scores_v10 = []
+                    
+                    for idx_all, r_all in df_h_v.iterrows():
+                        if 0.0 < r_all['base_rtc'] < 300.0:
+                            v_rtc_all_std = r_all['base_rtc'] / r_all['dist'] if r_all['dist'] > 0 else r_all['base_rtc'] / 1600.0
+                            list_all_rtc_std_v10.append(v_rtc_all_std * val_sim_dist)
+                        
+                        if r_all['race_l3f'] > 0.0 and r_all['l3f'] > 0.0:
+                            val_l3f_diff_v10 = r_all['race_l3f'] - r_all['l3f']
+                            val_burst_score_v10 = val_l3f_diff_v10 * (r_all['load'] / 10.0)
+                            list_burst_scores_v10.append(val_burst_score_v10)
+
+                    val_std_rtc_v10 = pd.Series(list_all_rtc_std_v10).std() if len(list_all_rtc_std_v10) > 1 else 0.0
+                    label_consistency_v10 = "普通"
+                    if pd.isna(val_std_rtc_v10) or val_std_rtc_v10 == 0.0:
+                        label_consistency_v10 = "判定不能"
+                    elif val_std_rtc_v10 <= 0.5:
+                        label_consistency_v10 = "🛡️安定(軸向)"
+                    elif val_std_rtc_v10 >= 1.5:
+                        label_consistency_v10 = "🎲ムラ(穴向)"
+
+                    val_avg_burst_v10 = sum(list_burst_scores_v10) / len(list_burst_scores_v10) if list_burst_scores_v10 else 0.0
+                    label_burst_v10 = "-"
+                    if val_avg_burst_v10 >= 0.5:
+                        label_burst_v10 = "🚀極限鬼脚"
+                    elif val_avg_burst_v10 >= 0.2:
+                        label_burst_v10 = "💨鋭い脚"
                     
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "得意展開": dict_horse_pref_type_v75[h_n_v],
                         "路線変更": str_cross_label if flag_is_cross_surface else "-",
-                        "コース適性": aptitude_label_v9, # 🌟 新規カラム追加
+                        "コース適性": aptitude_label_v9, 
+                        "安定度": label_consistency_v10, # 🌟 新規カラム
+                        "鬼脚": label_burst_v10,       # 🌟 新規カラム
                         "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo'],
                         "is_cross": flag_is_cross_surface,
-                        "course_bonus": course_aptitude_bonus_v9 # 🌟 新規ボーナス追加
+                        "course_bonus": course_aptitude_bonus_v9 
                     })
                 
                 df_final_v = pd.DataFrame(list_res_v)
@@ -964,7 +994,6 @@ with tab_simulator:
                     if row.get('is_cross', False):
                         adj += 0.0
                         
-                    # 🌟 コース適性ボーナスの適用
                     adj += row.get('course_bonus', 0.0)
 
                     return row['raw_rtc'] + adj
@@ -980,6 +1009,20 @@ with tab_simulator:
                 
                 df_final_v['予想人気'] = df_final_v['馬名'].map(sim_p_map)
                 df_final_v['妙味スコア'] = df_final_v['予想人気'] - df_final_v['順位']
+                
+                # 🌟 【新機能4】推定オッズ乖離・期待値判定
+                def evaluate_expected_value_v10(row):
+                    gap = row['妙味スコア']
+                    if row['順位'] <= 3 and row['予想人気'] >= 6:
+                        return "🔥爆・期待値最高"
+                    elif gap >= 3:
+                        return "📈妙味あり"
+                    elif gap <= -3:
+                        return "⚠️過剰人気"
+                    else:
+                        return "妥当"
+
+                df_final_v['期待値'] = df_final_v.apply(evaluate_expected_value_v10, axis=1)
                 
                 df_bomb = df_final_v[df_final_v['順位'] > 1].sort_values("妙味スコア", ascending=False)
                 if not df_bomb.empty:
@@ -1007,8 +1050,8 @@ with tab_simulator:
                     if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
-                # 🌟 カラムに「コース適性」を追加
-                st.table(df_final_v[["役割", "順位", "馬名", "脚質", "得意展開", "路線変更", "コース適性", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
+                # 🌟 新規カラムをテーブル出力に追加
+                st.table(df_final_v[["役割", "順位", "馬名", "予想人気", "期待値", "脚質", "得意展開", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
 # 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細
