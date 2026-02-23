@@ -331,12 +331,13 @@ MASTER_CONFIG_V65_GRADIENT_FACTORS = {
 # 6. メインUI構成 - タブインターフェースの絶対的物理宣言
 # ==============================================================================
 
-tab_main_analysis, tab_horse_history, tab_race_history, tab_simulator, tab_trends, tab_management = st.tabs([
+tab_main_analysis, tab_horse_history, tab_race_history, tab_simulator, tab_trends, tab_backtest, tab_management = st.tabs([
     "📝 解析・保存", 
     "🐎 馬別履歴", 
     "🏁 レース別履歴", 
     "🎯 シミュレーター", 
     "📈 馬場トレンド", 
+    "📊 バックテスト",
     "🗑 データ管理"
 ])
 
@@ -369,9 +370,25 @@ with tab_main_analysis:
                     else: str_date_pk = val_date_pk.strftime('%Y-%m-%d')
                 else: str_date_pk = ""
 
+                # 🔼 RTC推移トレンド判定（直近3走の正規化RTCが単調改善かチェック）
+                str_trend_pk = ""
+                df_pk_horse_trend = df_pickup_tab1_raw[df_pickup_tab1_raw['name'] == row_pickup_item['name']].sort_values("date")
+                pk_recent_valid = df_pk_horse_trend[(df_pk_horse_trend['base_rtc'] > 0) & (df_pk_horse_trend['base_rtc'] < 999)].tail(3)
+                if len(pk_recent_valid) >= 3:
+                    pk_norm_vals = []
+                    for _, pk_r in pk_recent_valid.iterrows():
+                        if pk_r['dist'] > 0:
+                            pk_norm_vals.append(pk_r['base_rtc'] / pk_r['dist'] * 1600)
+                    if len(pk_norm_vals) >= 3:
+                        if pk_norm_vals[0] > pk_norm_vals[1] > pk_norm_vals[2]:
+                            str_trend_pk = "🔼上昇中"
+                        elif pk_norm_vals[0] < pk_norm_vals[1] < pk_norm_vals[2]:
+                            str_trend_pk = "🔽下降中"
+
                 list_pickup_entries_final.append({
                     "馬名": row_pickup_item['name'], 
-                    "逆行タイプ": label_reverse_type_final, 
+                    "逆行タイプ": label_reverse_type_final,
+                    "トレンド": str_trend_pk,
                     "前走": row_pickup_item['last_race'],
                     "日付": str_date_pk, 
                     "解析メモ": str_memo_val_item
@@ -706,7 +723,114 @@ with tab_horse_history:
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind'] = new_kind_t2_v6_val
                     if safe_update(df_t2_source_v6):
                         st.success(f"【{val_sel_target_h_t2_v6}】同期成功"); st.rerun()
-        
+
+        # ==============================================================================
+        # 【機能3】RTC推移分析 / ピーク時期予測 / 距離適性テーブル
+        # ==============================================================================
+        st.divider()
+        st.subheader(f"📈 {val_sel_target_h_t2_v6} 能力推移詳細分析")
+
+        df_trend_target = df_t2_source_v6[df_t2_source_v6['name'] == val_sel_target_h_t2_v6].sort_values("date")
+        df_trend_valid = df_trend_target[(df_trend_target['base_rtc'] > 0) & (df_trend_target['base_rtc'] < 999)].copy()
+
+        if not df_trend_valid.empty:
+            # 距離正規化RTC（異なる距離のレースを1600m基準で比較可能にする）
+            df_trend_valid['norm_rtc'] = df_trend_valid.apply(
+                lambda r: r['base_rtc'] / r['dist'] * 1600 if r['dist'] > 0 else r['base_rtc'], axis=1
+            )
+            df_trend_valid['date_str'] = df_trend_valid['date'].apply(
+                lambda x: x.strftime('%Y-%m-%d') if not pd.isna(x) else ""
+            )
+            chart_df_trend = df_trend_valid[df_trend_valid['date_str'] != ""][['date_str', 'norm_rtc']].set_index('date_str')
+            st.caption("正規化RTC推移（1600m換算・低いほど高パフォーマンス）")
+            st.line_chart(chart_df_trend, use_container_width=True)
+
+            # トレンドラベル判定（直近3走）
+            recent3_norm = df_trend_valid['norm_rtc'].tail(3).tolist()
+            if len(recent3_norm) >= 3:
+                if recent3_norm[0] > recent3_norm[1] > recent3_norm[2]:
+                    trend_result_label = "🔼上昇中（直近3走で継続的にタイム短縮）"
+                elif recent3_norm[0] < recent3_norm[1] < recent3_norm[2]:
+                    trend_result_label = "🔽下降中（直近3走で継続的にタイム悪化）"
+                else:
+                    trend_result_label = "➡️横ばい（直近3走で上下動あり）"
+            elif len(recent3_norm) == 2:
+                if recent3_norm[0] > recent3_norm[1]:
+                    trend_result_label = "🔼上昇（2走で比較）"
+                elif recent3_norm[0] < recent3_norm[1]:
+                    trend_result_label = "🔽下降（2走で比較）"
+                else:
+                    trend_result_label = "➡️変化なし"
+            else:
+                trend_result_label = "データ不足"
+
+            # ピーク時期推定（連続出走数を日付間隔で判定）
+            dates_for_peak = df_trend_target['date'].dropna().sort_values().tolist()
+            consecutive_runs = 1
+            if len(dates_for_peak) >= 2:
+                ref_date = dates_for_peak[-1]
+                for i in range(len(dates_for_peak) - 2, -1, -1):
+                    prev_d = dates_for_peak[i]
+                    try:
+                        gap_days = (ref_date - prev_d).days
+                        if gap_days <= 35:
+                            consecutive_runs += 1
+                            ref_date = prev_d
+                        else:
+                            break
+                    except Exception:
+                        break
+
+            if consecutive_runs == 1:
+                peak_status_label = "🌱 休養明け初戦（仕上がり途上の可能性）"
+            elif consecutive_runs == 2:
+                peak_status_label = "📈 叩き2走目（上昇途中・次走に期待）"
+            elif consecutive_runs == 3:
+                peak_status_label = "🔥 叩き3走目（ピーク到達の可能性大）"
+            elif consecutive_runs == 4:
+                peak_status_label = "⚠️ 叩き4走目（疲労蓄積に注意）"
+            else:
+                peak_status_label = f"🚨 叩き{consecutive_runs}走目（過剰疲労リスク高）"
+
+            col_tr1, col_tr2 = st.columns(2)
+            with col_tr1:
+                st.metric("📊 RTCトレンド", trend_result_label)
+            with col_tr2:
+                st.metric("🎯 ピーク時期判定", peak_status_label)
+
+            # 距離別適性テーブル
+            st.markdown("##### 🏇 距離帯別適性")
+            dist_range_defs = [
+                ("短距離 (~1400m)", 0, 1400),
+                ("マイル (1401~1800m)", 1401, 1800),
+                ("中距離 (1801~2200m)", 1801, 2200),
+                ("長距離 (2201m~)", 2201, 99999),
+            ]
+            dist_apt_rows = []
+            for d_label, d_min, d_max in dist_range_defs:
+                df_d_sub = df_trend_target[(df_trend_target['dist'] >= d_min) & (df_trend_target['dist'] <= d_max)].copy()
+                if df_d_sub.empty:
+                    continue
+                n_d = len(df_d_sub)
+                n_top3_d = len(df_d_sub[df_d_sub['result_pos'] <= 3]) if df_d_sub['result_pos'].sum() > 0 else 0
+                valid_rtc_d = df_d_sub[(df_d_sub['base_rtc'] > 0) & (df_d_sub['base_rtc'] < 999)]
+                if valid_rtc_d.empty:
+                    continue
+                avg_norm_d = (valid_rtc_d['base_rtc'] / valid_rtc_d['dist'] * 1600).mean()
+                dist_apt_rows.append({
+                    "距離帯": d_label,
+                    "走数": n_d,
+                    "複勝率": f"{n_top3_d / n_d * 100:.0f}%" if n_d > 0 else "-",
+                    "平均正規化RTC": f"{avg_norm_d:.2f}秒",
+                    "判定": "🔥得意" if (n_top3_d / n_d >= 0.4 and n_d >= 2) else "❌苦手" if (n_top3_d / n_d < 0.2 and n_d >= 3) else "普通",
+                })
+            if dist_apt_rows:
+                st.dataframe(pd.DataFrame(dist_apt_rows), use_container_width=True, hide_index=True)
+            else:
+                st.caption("距離別データなし（データが少ない場合があります）")
+        else:
+            st.info("有効なRTCデータがないため推移分析を表示できません。")
+
         df_t2_filtered_v6 = df_t2_source_v6[df_t2_source_v6['name'].str.contains(input_horse_search_q_v6, na=False)] if input_horse_search_q_v6 else df_t2_source_v6
         df_t2_final_view_f_v6 = df_t2_filtered_v6.copy()
         
@@ -959,13 +1083,70 @@ with tab_simulator:
                         label_burst_v10 = "🚀極限鬼脚"
                     elif val_avg_burst_v10 >= 0.2:
                         label_burst_v10 = "💨鋭い脚"
-                    
+
+                    # ==============================================================================
+                    # 【機能7】ペース適性スコア：過去レースのペース別・展開別成績から算出
+                    # ==============================================================================
+                    dict_pace_hit_v10 = {"ハイペース": [], "スローペース": [], "ミドルペース": []}
+                    dict_racetype_hit_v10 = {"瞬発力戦": [], "持続力戦": []}
+
+                    for idx_pa, row_pa in df_h_v.iterrows():
+                        memo_pa = str(row_pa.get('memo', ''))
+                        pos_pa = row_pa.get('result_pos', 0)
+                        if pd.isna(pos_pa) or pos_pa <= 0:
+                            continue
+                        hit_pa = 1 if float(pos_pa) <= 3 else 0
+                        if 'ハイ' in memo_pa:
+                            dict_pace_hit_v10["ハイペース"].append(hit_pa)
+                        elif 'スロー' in memo_pa:
+                            dict_pace_hit_v10["スローペース"].append(hit_pa)
+                        else:
+                            dict_pace_hit_v10["ミドルペース"].append(hit_pa)
+                        race_type_pa = str(row_pa.get('race_type', ''))
+                        if race_type_pa == "瞬発力戦":
+                            dict_racetype_hit_v10["瞬発力戦"].append(hit_pa)
+                        elif race_type_pa == "持続力戦":
+                            dict_racetype_hit_v10["持続力戦"].append(hit_pa)
+
+                    if "ハイ" in str_sim_pace:
+                        sim_target_pace_key = "ハイペース"
+                    elif "スロー" in str_sim_pace:
+                        sim_target_pace_key = "スローペース"
+                    else:
+                        sim_target_pace_key = "ミドルペース"
+
+                    pace_samples = dict_pace_hit_v10[sim_target_pace_key]
+                    if pace_samples:
+                        pace_hit_rate_v10 = sum(pace_samples) / len(pace_samples)
+                        n_pace = len(pace_samples)
+                        if pace_hit_rate_v10 >= 0.5 and n_pace >= 2:
+                            label_pace_apt_v10 = f"🔥{sim_target_pace_key}得意({int(pace_hit_rate_v10*100)}%/{n_pace}走)"
+                        elif pace_hit_rate_v10 >= 0.3:
+                            label_pace_apt_v10 = f"⭕適性あり({int(pace_hit_rate_v10*100)}%/{n_pace}走)"
+                        elif n_pace >= 3:
+                            label_pace_apt_v10 = f"❌苦手({int(pace_hit_rate_v10*100)}%/{n_pace}走)"
+                        else:
+                            label_pace_apt_v10 = f"参考({n_pace}走のみ)"
+                    else:
+                        label_pace_apt_v10 = "実績なし"
+
+                    # 展開タイプ適性も確認してシナジー補正に加える
+                    if str_sim_race_type_forecast_v75 == "瞬発力戦":
+                        rt_samples = dict_racetype_hit_v10["瞬発力戦"]
+                    else:
+                        rt_samples = dict_racetype_hit_v10["持続力戦"]
+                    if rt_samples:
+                        rt_hit_rate_v10 = sum(rt_samples) / len(rt_samples)
+                        rt_label_part = f"/{str_sim_race_type_forecast_v75}:{int(rt_hit_rate_v10*100)}%"
+                        label_pace_apt_v10 += rt_label_part
+
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "得意展開": dict_horse_pref_type_v75[h_n_v],
                         "路線変更": str_cross_label if flag_is_cross_surface else "-",
                         "コース適性": aptitude_label_v9, 
-                        "安定度": label_consistency_v10, # 🌟 新規カラム
-                        "鬼脚": label_burst_v10,       # 🌟 新規カラム
+                        "安定度": label_consistency_v10,
+                        "鬼脚": label_burst_v10,
+                        "ペース適性": label_pace_apt_v10,
                         "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo'],
                         "is_cross": flag_is_cross_surface,
@@ -1030,6 +1211,24 @@ with tab_simulator:
 
                 st.markdown("---")
                 st.subheader(f"🏁 展開予想：{str_sim_pace} × {str_sim_race_type_forecast_v75} ({num_sim_total}頭立て)")
+
+                # 【機能7】逃げ馬複数警告 & ペース予測根拠を明示表示
+                if dict_styles["逃げ"] >= 2:
+                    st.error(f"🚨 **逃げ馬複数警告**: 逃げ脚質が{dict_styles['逃げ']}頭確認。ハイペース確定に近く、先行馬も苦戦必至。差し・追込馬を優先的に評価してください。")
+                elif dict_styles["逃げ"] == 1 and (dict_styles["逃げ"] + dict_styles["先行"]) >= num_sim_total * 0.5:
+                    st.warning(f"⚠️ **前傾メンバー構成**: 先行勢が過半数 ({dict_styles['逃げ']}逃げ/{dict_styles['先行']}先行)。ペースが上がりやすく差し馬の台頭に注意。")
+                elif dict_styles["逃げ"] == 0:
+                    st.info(f"ℹ️ **逃げ馬不在**: 逃げ脚質0頭。先行争いが激化しにくく、スローペース後の瞬発力勝負になりやすい構成です。")
+
+                col_pace_detail1, col_pace_detail2, col_pace_detail3, col_pace_detail4 = st.columns(4)
+                with col_pace_detail1:
+                    st.metric("逃げ", f"{dict_styles['逃げ']}頭")
+                with col_pace_detail2:
+                    st.metric("先行", f"{dict_styles['先行']}頭")
+                with col_pace_detail3:
+                    st.metric("差し", f"{dict_styles['差し']}頭")
+                with col_pace_detail4:
+                    st.metric("追込", f"{dict_styles['追込']}頭")
                 
                 fav_name = df_final_v[df_final_v['役割'] == "◎"].iloc[0]['馬名'] if not df_final_v[df_final_v['役割'] == "◎"].empty else ""
                 opp_name = df_final_v[df_final_v['役割'] == "〇"].iloc[0]['馬名'] if not df_final_v[df_final_v['役割'] == "〇"].empty else ""
@@ -1050,8 +1249,7 @@ with tab_simulator:
                     if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
-                # 🌟 新規カラムをテーブル出力に追加
-                st.table(df_final_v[["役割", "順位", "馬名", "予想人気", "期待値", "脚質", "得意展開", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
+                st.table(df_final_v[["役割", "順位", "馬名", "予想人気", "期待値", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
 # 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細
@@ -1066,6 +1264,224 @@ with tab_trends:
         if not tdf_v.empty:
             st.subheader("💧 物理推移グラフ")
             st.line_chart(tdf_v.set_index("date")[["cushion", "water"]])
+
+# ==============================================================================
+# 11.5. Tab バックテスト: 回収率分析 / ケリー基準 / 上昇馬ピックアップ
+# ==============================================================================
+
+with tab_backtest:
+    st.header("📊 バックテスト & 回収率分析エンジン")
+    df_bt = get_db_data()
+
+    # 結果が入力された行のみ対象（result_pos > 0 かつ result_pop > 0）
+    df_bt_valid = df_bt[(df_bt['result_pos'] > 0) & (df_bt['result_pop'] > 0)].copy()
+
+    if df_bt_valid.empty:
+        st.info("まだ結果が入力されたデータがありません。「レース別履歴」タブで着順・人気を入力するとバックテストが可能になります。")
+    else:
+        # 人気順位から単勝オッズの推定値マップ（日本競馬標準的な近似値）
+        BACKTEST_SINGLE_ODDS_MAP = {
+            1: 2.5, 2: 4.2, 3: 6.5, 4: 10.0, 5: 15.0,
+            6: 23.0, 7: 35.0, 8: 55.0, 9: 80.0, 10: 110.0
+        }
+
+        def bt_estimate_win_odds(pop_val):
+            try:
+                p_int = int(float(pop_val))
+                if p_int in BACKTEST_SINGLE_ODDS_MAP:
+                    return BACKTEST_SINGLE_ODDS_MAP[p_int]
+                elif p_int > 10:
+                    return 110.0 + (p_int - 10) * 25.0
+                return 100.0
+            except Exception:
+                return 100.0
+
+        df_bt_valid['est_win_odds'] = df_bt_valid['result_pop'].apply(bt_estimate_win_odds)
+        df_bt_valid['hit_top1'] = (df_bt_valid['result_pos'] == 1).astype(int)
+        df_bt_valid['hit_top2'] = (df_bt_valid['result_pos'] <= 2).astype(int)
+        df_bt_valid['hit_top3'] = (df_bt_valid['result_pos'] <= 3).astype(int)
+
+        # ============================================================
+        # セクション1: 買いフラグ別 回収率シミュレーション
+        # ============================================================
+        st.subheader("🎯 買いフラグ別 回収率シミュレーション")
+        st.caption("※単勝オッズは人気順位からの推定値です。実際の払い戻しとは異なります。")
+
+        flag_condition_defs = [
+            ("★逆行狙い (次走フラグあり)", lambda r: "★逆行狙い" in str(r['next_buy_flag'])),
+            ("💎バイアス逆行を含む", lambda r: "💎" in str(r['memo'])),
+            ("🔥展開逆行を含む", lambda r: "🔥" in str(r['memo'])),
+            ("💥両方逆行 (超高評価)", lambda r: "💎" in str(r['memo']) and "🔥" in str(r['memo'])),
+            ("全記録（ベースライン比較）", lambda r: True),
+        ]
+
+        analysis_result_rows = []
+        for flag_display_name, flag_cond_fn in flag_condition_defs:
+            df_flag_sub = df_bt_valid[df_bt_valid.apply(flag_cond_fn, axis=1)].copy()
+            if len(df_flag_sub) == 0:
+                continue
+
+            n_total = len(df_flag_sub)
+            win_rate_v = df_flag_sub['hit_top1'].mean()
+            rentan_rate_v = df_flag_sub['hit_top2'].mean()
+            fuku_rate_v = df_flag_sub['hit_top3'].mean()
+            avg_pop_v = df_flag_sub['result_pop'].mean()
+
+            # 推定単勝回収率 = 的中時オッズ合計 / 総投票数 * 100
+            total_return_v = df_flag_sub[df_flag_sub['hit_top1'] == 1]['est_win_odds'].sum()
+            roi_single_v = (total_return_v / n_total) * 100 if n_total > 0 else 0.0
+
+            # ケリー基準: f* = (b*p - (1-p)) / b
+            avg_odds_v = df_flag_sub['est_win_odds'].mean()
+            b_kelly = avg_odds_v - 1.0
+            p_kelly = win_rate_v
+            if b_kelly > 0 and p_kelly > 0:
+                kelly_fraction = max(0.0, (b_kelly * p_kelly - (1.0 - p_kelly)) / b_kelly)
+                kelly_display = f"{kelly_fraction * 100:.1f}%" if kelly_fraction > 0 else "見送り推奨"
+            else:
+                kelly_display = "見送り推奨"
+
+            analysis_result_rows.append({
+                "フラグ種別": flag_display_name,
+                "対象数": n_total,
+                "単勝率": f"{win_rate_v * 100:.1f}%",
+                "連対率": f"{rentan_rate_v * 100:.1f}%",
+                "複勝率": f"{fuku_rate_v * 100:.1f}%",
+                "平均人気": f"{avg_pop_v:.1f}",
+                "推定単勝回収率": f"{roi_single_v:.0f}%",
+                "ケリー推奨賭け比率": kelly_display,
+            })
+
+        if analysis_result_rows:
+            df_analysis_display = pd.DataFrame(analysis_result_rows)
+            st.dataframe(df_analysis_display, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ============================================================
+        # セクション2: 馬別 回収率ランキング
+        # ============================================================
+        st.subheader("🐎 馬別 推定回収率ランキング（Top20）")
+        st.caption("走数2走以上のデータがある馬のみ対象。単勝回収率ベースでソート。")
+
+        horse_analysis_rows = []
+        for h_name_bt in df_bt_valid['name'].dropna().unique():
+            df_h_bt = df_bt_valid[df_bt_valid['name'] == h_name_bt].copy()
+            n_h_bt = len(df_h_bt)
+            if n_h_bt < 2:
+                continue
+
+            win_r_h = df_h_bt['hit_top1'].mean()
+            fuku_r_h = df_h_bt['hit_top3'].mean()
+            total_ret_h = df_h_bt[df_h_bt['hit_top1'] == 1]['est_win_odds'].sum()
+            roi_h = (total_ret_h / n_h_bt) * 100 if n_h_bt > 0 else 0.0
+            avg_pop_h = df_h_bt['result_pop'].mean()
+
+            horse_analysis_rows.append({
+                "馬名": h_name_bt,
+                "走数": n_h_bt,
+                "複勝率": f"{fuku_r_h * 100:.0f}%",
+                "単勝率": f"{win_r_h * 100:.0f}%",
+                "平均人気": f"{avg_pop_h:.1f}",
+                "推定単勝回収率": f"{roi_h:.0f}%",
+                "_roi_sort": roi_h,
+            })
+
+        if horse_analysis_rows:
+            df_horse_rank_bt = pd.DataFrame(horse_analysis_rows).sort_values('_roi_sort', ascending=False).drop('_roi_sort', axis=1)
+            st.dataframe(df_horse_rank_bt.head(20), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ============================================================
+        # セクション3: 上昇馬ピックアップ（RTC推移分析）
+        # ============================================================
+        st.subheader("🔼 上昇馬ピックアップ（直近3走でRTC単調改善）")
+        st.caption("直近3走の正規化RTC（1600m換算）が継続的に低下（改善）している馬を自動抽出します。")
+
+        rising_horse_rows = []
+        for h_name_rising in df_bt['name'].dropna().unique():
+            df_h_rising = df_bt[df_bt['name'] == h_name_rising].sort_values("date")
+            valid_rtc_rising = df_h_rising[(df_h_rising['base_rtc'] > 0) & (df_h_rising['base_rtc'] < 999)].tail(3)
+            if len(valid_rtc_rising) < 3:
+                continue
+            norm_rtc_rising = []
+            for _, r_rising in valid_rtc_rising.iterrows():
+                if r_rising['dist'] > 0:
+                    norm_rtc_rising.append(r_rising['base_rtc'] / r_rising['dist'] * 1600)
+            if len(norm_rtc_rising) >= 3 and norm_rtc_rising[0] > norm_rtc_rising[1] > norm_rtc_rising[2]:
+                last_entry_rising = df_h_rising.iloc[-1]
+                improvement = norm_rtc_rising[0] - norm_rtc_rising[2]
+                last_date_rising = last_entry_rising['date']
+                last_date_str = last_date_rising.strftime('%Y-%m-%d') if not pd.isna(last_date_rising) else ""
+                rising_horse_rows.append({
+                    "馬名": h_name_rising,
+                    "直近3走 正規化RTC": f"{norm_rtc_rising[0]:.2f} → {norm_rtc_rising[1]:.2f} → {norm_rtc_rising[2]:.2f}",
+                    "総改善幅": f"{improvement:.2f}秒",
+                    "最終レース": str(last_entry_rising.get('last_race', '')),
+                    "最終日付": last_date_str,
+                })
+
+        if rising_horse_rows:
+            df_rising_display = pd.DataFrame(rising_horse_rows).sort_values("総改善幅", ascending=False)
+            st.dataframe(df_rising_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("直近3走で連続的にRTCが改善している馬は現在いません。データを蓄積すると自動的に表示されます。")
+
+        st.divider()
+
+        # ============================================================
+        # セクション4: ピーク時期予測（叩き本数別一覧）
+        # ============================================================
+        st.subheader("🎯 全馬ピーク時期予測（叩き本数分析）")
+        st.caption("直近の連続出走数（35日以内）に基づき叩き本数を自動算出。叩き3走目がピーク期の目安。")
+
+        peak_timing_rows = []
+        for h_name_peak in df_bt['name'].dropna().unique():
+            df_h_peak = df_bt[df_bt['name'] == h_name_peak].sort_values("date")
+            if len(df_h_peak) < 1:
+                continue
+            dates_peak = df_h_peak['date'].dropna().sort_values().tolist()
+            if not dates_peak:
+                continue
+
+            consecutive_peak = 1
+            ref_d_peak = dates_peak[-1]
+            for i_pk in range(len(dates_peak) - 2, -1, -1):
+                prev_d_peak = dates_peak[i_pk]
+                try:
+                    gap_pk = (ref_d_peak - prev_d_peak).days
+                    if gap_pk <= 35:
+                        consecutive_peak += 1
+                        ref_d_peak = prev_d_peak
+                    else:
+                        break
+                except Exception:
+                    break
+
+            if consecutive_peak == 1:
+                peak_label_h = "🌱 休養明け初戦"
+            elif consecutive_peak == 2:
+                peak_label_h = "📈 叩き2走目（上昇途中）"
+            elif consecutive_peak == 3:
+                peak_label_h = "🔥 叩き3走目（ピーク期）"
+            else:
+                peak_label_h = f"⚠️ 叩き{consecutive_peak}走目（疲労注意）"
+
+            last_r_peak = df_h_peak.iloc[-1]
+            last_date_peak = last_r_peak['date']
+            last_date_str_peak = last_date_peak.strftime('%Y-%m-%d') if not pd.isna(last_date_peak) else ""
+            peak_timing_rows.append({
+                "馬名": h_name_peak,
+                "ピーク判定": peak_label_h,
+                "連続出走数": consecutive_peak,
+                "最終レース": str(last_r_peak.get('last_race', '')),
+                "最終日付": last_date_str_peak,
+            })
+
+        if peak_timing_rows:
+            df_peak_display = pd.DataFrame(peak_timing_rows).sort_values("連続出走数")
+            st.dataframe(df_peak_display, use_container_width=True, hide_index=True)
 
 with tab_management:
     st.header("🗑 物理管理 & 再解析工程詳細")
