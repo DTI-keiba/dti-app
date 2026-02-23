@@ -921,6 +921,7 @@ with tab_simulator:
                 val_sim_course = st.selectbox("次走競馬場", list(MASTER_CONFIG_V65_TURF_LOAD_COEFFS.keys()))
                 val_sim_dist = st.selectbox("次走距離", list_dist_range_opts_actual_f if 'list_dist_range_opts_actual_f' in locals() else [1600], index=0)
                 opt_sim_track = st.radio("次走種別", ["芝", "ダート"], horizontal=True)
+                val_sim_race_name = st.text_input("次走レース名（任意・同一レース歴を検索）", value="", placeholder="例: 天皇賞秋、有馬記念")
             with c_sc_2:
                 val_sim_cush = st.slider("想定クッション", 7.0, 12.0, 9.5)
                 val_sim_water = st.slider("想定含水率", 0.0, 30.0, 10.0)
@@ -1140,6 +1141,43 @@ with tab_simulator:
                         rt_label_part = f"/{str_sim_race_type_forecast_v75}:{int(rt_hit_rate_v10*100)}%"
                         label_pace_apt_v10 += rt_label_part
 
+                    # ==============================================================================
+                    # 【同一レース過去歴】入力したレース名で馬の過去成績を検索
+                    # ==============================================================================
+                    label_same_race_hist = "-"
+                    if val_sim_race_name.strip():
+                        # 部分一致で同名レースの過去出走を検索
+                        df_same_race_h = df_h_v[df_h_v['last_race'].str.contains(
+                            val_sim_race_name.strip(), na=False, case=False
+                        )].sort_values("date")
+
+                        if not df_same_race_h.empty:
+                            n_same = len(df_same_race_h)
+                            # 結果が入力されている行のみで集計
+                            df_same_with_res = df_same_race_h[df_same_race_h['result_pos'] > 0]
+                            if not df_same_with_res.empty:
+                                best_pos = int(df_same_with_res['result_pos'].min())
+                                avg_pos = df_same_with_res['result_pos'].mean()
+                                n_top3 = len(df_same_with_res[df_same_with_res['result_pos'] <= 3])
+                                # 最新出走時のRTC（1600m正規化）
+                                last_same = df_same_race_h.iloc[-1]
+                                last_same_date = last_same['date']
+                                last_date_str = last_same_date.strftime('%Y/%m/%d') if not pd.isna(last_same_date) else "日付不明"
+                                if best_pos == 1:
+                                    result_icon = "🥇"
+                                elif best_pos <= 3:
+                                    result_icon = "🥈"
+                                elif best_pos <= 5:
+                                    result_icon = "✅"
+                                else:
+                                    result_icon = "📋"
+                                label_same_race_hist = f"{result_icon}{n_same}走/最高{best_pos}着/複勝{n_top3}/{len(df_same_with_res)}回({last_date_str})"
+                            else:
+                                # 出走歴はあるが着順未入力
+                                label_same_race_hist = f"📋出走歴{n_same}回（着順未入力）"
+                        else:
+                            label_same_race_hist = "初出走"
+
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "得意展開": dict_horse_pref_type_v75[h_n_v],
                         "路線変更": str_cross_label if flag_is_cross_surface else "-",
@@ -1147,6 +1185,7 @@ with tab_simulator:
                         "安定度": label_consistency_v10,
                         "鬼脚": label_burst_v10,
                         "ペース適性": label_pace_apt_v10,
+                        "同一レース歴": label_same_race_hist,
                         "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo'],
                         "is_cross": flag_is_cross_surface,
@@ -1249,7 +1288,12 @@ with tab_simulator:
                     if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
-                st.table(df_final_v[["役割", "順位", "馬名", "予想人気", "期待値", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]].style.apply(highlight_role, axis=1))
+                # 同一レース歴カラムはレース名入力時のみ表示
+                if val_sim_race_name.strip():
+                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                else:
+                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                st.table(df_final_v[sim_display_cols].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
 # 11. Tab 5: トレンド統計詳細 & Tab 6: 物理管理詳細
@@ -1482,6 +1526,80 @@ with tab_backtest:
         if peak_timing_rows:
             df_peak_display = pd.DataFrame(peak_timing_rows).sort_values("連続出走数")
             st.dataframe(df_peak_display, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ============================================================
+        # セクション5: 同一レース過去歴検索
+        # ============================================================
+        st.subheader("🔍 同一レース過去歴検索")
+        st.caption("レース名（部分一致）を入力すると、そのレースに出走歴がある全馬の成績を表示します。")
+
+        bt_race_search_query = st.text_input("検索するレース名", value="", placeholder="例: 天皇賞、有馬、マイルCS", key="bt_race_search_q")
+
+        if bt_race_search_query.strip():
+            # 部分一致で対象レースを絞り込む
+            df_bt_race_all = get_db_data()
+            df_race_matched = df_bt_race_all[
+                df_bt_race_all['last_race'].str.contains(bt_race_search_query.strip(), na=False, case=False)
+            ].copy()
+
+            if df_race_matched.empty:
+                st.warning(f"「{bt_race_search_query}」に一致するレース出走歴が見つかりません。")
+            else:
+                # マッチしたレース名の一覧を表示
+                matched_race_names = sorted(df_race_matched['last_race'].dropna().unique().tolist())
+                st.info(f"マッチしたレース: {', '.join(matched_race_names)} （計{len(df_race_matched)}件）")
+
+                # 馬ごとに集計
+                same_race_summary_rows = []
+                for h_name_sr in df_race_matched['name'].dropna().unique():
+                    df_h_sr = df_race_matched[df_race_matched['name'] == h_name_sr].sort_values("date")
+                    n_sr = len(df_h_sr)
+
+                    df_h_sr_with_res = df_h_sr[df_h_sr['result_pos'] > 0]
+                    best_pos_sr = int(df_h_sr_with_res['result_pos'].min()) if not df_h_sr_with_res.empty else None
+                    avg_pos_sr = df_h_sr_with_res['result_pos'].mean() if not df_h_sr_with_res.empty else None
+                    n_top3_sr = len(df_h_sr_with_res[df_h_sr_with_res['result_pos'] <= 3]) if not df_h_sr_with_res.empty else 0
+
+                    # 最新出走時のRTC（正規化）
+                    last_sr = df_h_sr.iloc[-1]
+                    last_date_sr = last_sr['date']
+                    last_date_str_sr = last_date_sr.strftime('%Y-%m-%d') if not pd.isna(last_date_sr) else ""
+                    last_rtc_sr = last_sr['base_rtc']
+                    last_dist_sr = last_sr['dist']
+                    norm_rtc_sr = (last_rtc_sr / last_dist_sr * 1600) if (last_dist_sr > 0 and 0 < last_rtc_sr < 999) else None
+
+                    if best_pos_sr == 1:
+                        result_icon_sr = "🥇"
+                    elif best_pos_sr is not None and best_pos_sr <= 3:
+                        result_icon_sr = "🥈"
+                    elif best_pos_sr is not None and best_pos_sr <= 5:
+                        result_icon_sr = "✅"
+                    elif best_pos_sr is not None:
+                        result_icon_sr = "📋"
+                    else:
+                        result_icon_sr = "❓"
+
+                    same_race_summary_rows.append({
+                        "": result_icon_sr,
+                        "馬名": h_name_sr,
+                        "出走回数": n_sr,
+                        "最高着順": f"{best_pos_sr}着" if best_pos_sr is not None else "着順未入力",
+                        "平均着順": f"{avg_pos_sr:.1f}" if avg_pos_sr is not None else "-",
+                        "複勝回数": f"{n_top3_sr}/{len(df_h_sr_with_res)}" if not df_h_sr_with_res.empty else "-",
+                        "最終出走日": last_date_str_sr,
+                        "最終レース正規化RTC": f"{norm_rtc_sr:.2f}" if norm_rtc_sr is not None else "-",
+                        "最終レース名": str(last_sr.get('last_race', '')),
+                    })
+
+                if same_race_summary_rows:
+                    # 最高着順でソート（着順が良い順 = 数値が小さい順）
+                    df_sr_display = pd.DataFrame(same_race_summary_rows)
+                    # 最高着順を数値で一時ソート
+                    df_sr_display['_sort_key'] = df_sr_display['最高着順'].str.extract(r'(\d+)').astype(float).fillna(99)
+                    df_sr_display = df_sr_display.sort_values('_sort_key').drop('_sort_key', axis=1)
+                    st.dataframe(df_sr_display, use_container_width=True, hide_index=True)
 
 with tab_management:
     st.header("🗑 物理管理 & 再解析工程詳細")
