@@ -764,39 +764,7 @@ with tab_horse_history:
             else:
                 trend_result_label = "データ不足"
 
-            # ピーク時期推定（連続出走数を日付間隔で判定）
-            dates_for_peak = df_trend_target['date'].dropna().sort_values().tolist()
-            consecutive_runs = 1
-            if len(dates_for_peak) >= 2:
-                ref_date = dates_for_peak[-1]
-                for i in range(len(dates_for_peak) - 2, -1, -1):
-                    prev_d = dates_for_peak[i]
-                    try:
-                        gap_days = (ref_date - prev_d).days
-                        if gap_days <= 35:
-                            consecutive_runs += 1
-                            ref_date = prev_d
-                        else:
-                            break
-                    except Exception:
-                        break
-
-            if consecutive_runs == 1:
-                peak_status_label = "🌱 休養明け初戦（仕上がり途上の可能性）"
-            elif consecutive_runs == 2:
-                peak_status_label = "📈 叩き2走目（上昇途中・次走に期待）"
-            elif consecutive_runs == 3:
-                peak_status_label = "🔥 叩き3走目（ピーク到達の可能性大）"
-            elif consecutive_runs == 4:
-                peak_status_label = "⚠️ 叩き4走目（疲労蓄積に注意）"
-            else:
-                peak_status_label = f"🚨 叩き{consecutive_runs}走目（過剰疲労リスク高）"
-
-            col_tr1, col_tr2 = st.columns(2)
-            with col_tr1:
-                st.metric("📊 RTCトレンド", trend_result_label)
-            with col_tr2:
-                st.metric("🎯 ピーク時期判定", peak_status_label)
+            st.metric("📊 RTCトレンド", trend_result_label)
 
             # 距離別適性テーブル
             st.markdown("##### 🏇 距離帯別適性")
@@ -1502,62 +1470,7 @@ with tab_backtest:
         st.divider()
 
         # ============================================================
-        # セクション4: ピーク時期予測（叩き本数別一覧）
-        # ============================================================
-        st.subheader("🎯 全馬ピーク時期予測（叩き本数分析）")
-        st.caption("直近の連続出走数（35日以内）に基づき叩き本数を自動算出。叩き3走目がピーク期の目安。")
-
-        peak_timing_rows = []
-        for h_name_peak in df_bt['name'].dropna().unique():
-            df_h_peak = df_bt[df_bt['name'] == h_name_peak].sort_values("date")
-            if len(df_h_peak) < 1:
-                continue
-            dates_peak = df_h_peak['date'].dropna().sort_values().tolist()
-            if not dates_peak:
-                continue
-
-            consecutive_peak = 1
-            ref_d_peak = dates_peak[-1]
-            for i_pk in range(len(dates_peak) - 2, -1, -1):
-                prev_d_peak = dates_peak[i_pk]
-                try:
-                    gap_pk = (ref_d_peak - prev_d_peak).days
-                    if gap_pk <= 35:
-                        consecutive_peak += 1
-                        ref_d_peak = prev_d_peak
-                    else:
-                        break
-                except Exception:
-                    break
-
-            if consecutive_peak == 1:
-                peak_label_h = "🌱 休養明け初戦"
-            elif consecutive_peak == 2:
-                peak_label_h = "📈 叩き2走目（上昇途中）"
-            elif consecutive_peak == 3:
-                peak_label_h = "🔥 叩き3走目（ピーク期）"
-            else:
-                peak_label_h = f"⚠️ 叩き{consecutive_peak}走目（疲労注意）"
-
-            last_r_peak = df_h_peak.iloc[-1]
-            last_date_peak = last_r_peak['date']
-            last_date_str_peak = last_date_peak.strftime('%Y-%m-%d') if not pd.isna(last_date_peak) else ""
-            peak_timing_rows.append({
-                "馬名": h_name_peak,
-                "ピーク判定": peak_label_h,
-                "連続出走数": consecutive_peak,
-                "最終レース": str(last_r_peak.get('last_race', '')),
-                "最終日付": last_date_str_peak,
-            })
-
-        if peak_timing_rows:
-            df_peak_display = pd.DataFrame(peak_timing_rows).sort_values("連続出走数")
-            st.dataframe(df_peak_display, use_container_width=True, hide_index=True)
-
-        st.divider()
-
-        # ============================================================
-        # セクション5: 同一レース過去歴検索
+        # セクション4: 同一レース過去歴検索
         # ============================================================
         st.subheader("🔍 同一レース過去歴検索")
         st.caption("レース名（部分一致）を入力すると、そのレースに出走歴がある全馬の成績を表示します。")
