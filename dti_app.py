@@ -1178,6 +1178,23 @@ with tab_simulator:
                         else:
                             label_same_race_hist = "初出走"
 
+                    # ==============================================================================
+                    # RTC上昇・下降トレンド判定（直近3走の正規化RTCが単調改善か悪化かを判定）
+                    # compute_synergyでの微小補正に使用する
+                    # ==============================================================================
+                    rtc_trend_val = "横ばい"
+                    valid_rtc_trend = df_h_v[(df_h_v['base_rtc'] > 0) & (df_h_v['base_rtc'] < 999)].tail(3)
+                    if len(valid_rtc_trend) >= 3:
+                        trend_norm_vals = []
+                        for _, r_tr in valid_rtc_trend.iterrows():
+                            if r_tr['dist'] > 0:
+                                trend_norm_vals.append(r_tr['base_rtc'] / r_tr['dist'] * 1600)
+                        if len(trend_norm_vals) >= 3:
+                            if trend_norm_vals[0] > trend_norm_vals[1] > trend_norm_vals[2]:
+                                rtc_trend_val = "上昇中"
+                            elif trend_norm_vals[0] < trend_norm_vals[1] < trend_norm_vals[2]:
+                                rtc_trend_val = "下降中"
+
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "得意展開": dict_horse_pref_type_v75[h_n_v],
                         "路線変更": str_cross_label if flag_is_cross_surface else "-",
@@ -1186,10 +1203,12 @@ with tab_simulator:
                         "鬼脚": label_burst_v10,
                         "ペース適性": label_pace_apt_v10,
                         "同一レース歴": label_same_race_hist,
+                        "RTCトレンド": "🔼上昇中" if rtc_trend_val == "上昇中" else "🔽下降中" if rtc_trend_val == "下降中" else "➡️横ばい",
                         "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo'],
                         "is_cross": flag_is_cross_surface,
-                        "course_bonus": course_aptitude_bonus_v9 
+                        "course_bonus": course_aptitude_bonus_v9,
+                        "rtc_trend": rtc_trend_val
                     })
                 
                 df_final_v = pd.DataFrame(list_res_v)
@@ -1215,6 +1234,14 @@ with tab_simulator:
                         adj += 0.0
                         
                     adj += row.get('course_bonus', 0.0)
+
+                    # RTCトレンド補正: 上昇中は0.15秒短縮・下降中は0.15秒加算
+                    # 大差はつけず、同タイム帯での優先順位付けに使う微小補正
+                    trend = row.get('rtc_trend', '横ばい')
+                    if trend == "上昇中":
+                        adj -= 0.15
+                    elif trend == "下降中":
+                        adj += 0.15
 
                     return row['raw_rtc'] + adj
 
@@ -1290,9 +1317,9 @@ with tab_simulator:
 
                 # 同一レース歴カラムはレース名入力時のみ表示
                 if val_sim_race_name.strip():
-                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "RTCトレンド", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
                 else:
-                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "RTCトレンド", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
                 st.table(df_final_v[sim_display_cols].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
