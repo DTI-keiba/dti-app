@@ -14,7 +14,7 @@ from datetime import datetime
 # ページ設定の宣言（メタデータ、レイアウト、メニュー項目を詳細に指定）
 st.set_page_config(
     page_title="DTI Ultimate DB - The Absolute Master Edition v10.0",
-    page_icon="🐎",
+    page_icon="https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/1f3c7.png",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
