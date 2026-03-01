@@ -1335,8 +1335,8 @@ with tab_simulator:
                 with col_pace_detail4:
                     st.metric("追込", f"{dict_styles['追込']}頭")
                 
-                # 本命(1～5人気)1頭・相手(6～9人気)1頭・相手(10人気以下)1頭の2点流し（10人気以下で力不足の馬は除外し1点勝負に）
-                df_1_5 = df_final_v[(df_final_v['予想人気'] >= 1) & (df_final_v['予想人気'] <= 5)].sort_values("synergy_rtc")
+                # 本命(1～3人気)1頭・相手(6～9人気)1頭・相手(10人気以下で力あり)1頭の2点流し or 1点勝負
+                df_1_3 = df_final_v[(df_final_v['予想人気'] >= 1) & (df_final_v['予想人気'] <= 3)].sort_values("synergy_rtc")
                 df_6_9 = df_final_v[(df_final_v['予想人気'] >= 6) & (df_final_v['予想人気'] <= 9)].sort_values("synergy_rtc")
                 df_10_plus = df_final_v[df_final_v['予想人気'] >= 10].sort_values("synergy_rtc")
 
@@ -1344,8 +1344,8 @@ with tab_simulator:
                 aite_6_9_name = ""
                 aite_10_name = ""
 
-                if not df_1_5.empty:
-                    honmei_name = df_1_5.iloc[0]['馬名']
+                if not df_1_3.empty:
+                    honmei_name = df_1_3.iloc[0]['馬名']
                 if not df_6_9.empty:
                     aite_6_9_name = df_6_9.iloc[0]['馬名']
 
@@ -1359,7 +1359,7 @@ with tab_simulator:
                 with col_rec1:
                     st.subheader("🎯 買い目（馬連・ワイド）")
                     if honmei_name:
-                        lines = [f"**本命（1～5人気）**: {honmei_name}"]
+                        lines = [f"**本命（1～3人気）**: {honmei_name}"]
                         if aite_6_9_name:
                             lines.append(f"**相手（6～9人気）**: {aite_6_9_name}")
                         if aite_10_name:
@@ -1379,7 +1379,7 @@ with tab_simulator:
                             lines.append("（6～9人気の馬がいないため買い目を出せません）")
                         st.info("\n\n".join(lines))
                     else:
-                        st.warning("1～5人気の馬がいないため買い目を出せません。")
+                        st.warning("1～3人気の馬がいないため買い目を出せません。")
 
                 with col_rec2:
                     bomb_name = df_final_v[df_final_v['役割'] == "★"].iloc[0]['馬名'] if not df_final_v[df_final_v['役割'] == "★"].empty else ""
