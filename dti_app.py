@@ -987,7 +987,20 @@ with tab_simulator:
                         
                         list_conv_rtc_v.append(v_step_rtc + p_v_s_adj + cross_penalty_v)
                         
-                    val_avg_rtc_res = sum(list_conv_rtc_v) / len(list_conv_rtc_v) if list_conv_rtc_v else 0
+                    # 【機能3】トリム平均: 5走以上は最高・最低を1つずつ除外、3〜4走は中央値、1〜2走は単純平均
+                    if len(list_conv_rtc_v) >= 5:
+                        sorted_rtc = sorted(list_conv_rtc_v)
+                        trimmed_rtc = sorted_rtc[1:-1]
+                        val_avg_rtc_res = sum(trimmed_rtc) / len(trimmed_rtc)
+                    elif len(list_conv_rtc_v) >= 3:
+                        sorted_rtc = sorted(list_conv_rtc_v)
+                        mid = len(sorted_rtc) // 2
+                        val_avg_rtc_res = sorted_rtc[mid]
+                    elif list_conv_rtc_v:
+                        val_avg_rtc_res = sum(list_conv_rtc_v) / len(list_conv_rtc_v)
+                    else:
+                        val_avg_rtc_res = 0
+
                     c_dict_v = MASTER_CONFIG_V65_DIRT_LOAD_COEFFS if opt_sim_track == "ダート" else MASTER_CONFIG_V65_TURF_LOAD_COEFFS
                     final_rtc_v = val_avg_rtc_res + (c_dict_v.get(val_sim_course, 0.20) * (val_sim_dist/1600.0)) - (9.5 - val_sim_cush) * 0.1
                     
@@ -1164,6 +1177,37 @@ with tab_simulator:
                             elif trend_norm_vals[0] < trend_norm_vals[1] < trend_norm_vals[2]:
                                 rtc_trend_val = "下降中"
 
+                    # ==============================================================================
+                    # 【機能7】距離適性ボーナス: 次走距離帯での過去複勝率に基づく補正値を算出
+                    # ==============================================================================
+                    if val_sim_dist <= 1400:
+                        dist_apt_range = (0, 1400)
+                    elif val_sim_dist <= 1800:
+                        dist_apt_range = (1401, 1800)
+                    elif val_sim_dist <= 2200:
+                        dist_apt_range = (1801, 2200)
+                    else:
+                        dist_apt_range = (2201, 99999)
+
+                    df_dist_apt = df_h_v[
+                        (df_h_v['dist'] >= dist_apt_range[0]) & (df_h_v['dist'] <= dist_apt_range[1]) &
+                        (df_h_v['result_pos'] > 0)
+                    ]
+                    df_all_results = df_h_v[df_h_v['result_pos'] > 0]
+                    dist_apt_bonus = 0.0
+                    dist_apt_label = "-"
+                    if len(df_dist_apt) >= 2 and len(df_all_results) >= 2:
+                        dist_fuku_rate = len(df_dist_apt[df_dist_apt['result_pos'] <= 3]) / len(df_dist_apt)
+                        all_fuku_rate = len(df_all_results[df_all_results['result_pos'] <= 3]) / len(df_all_results)
+                        dist_diff = dist_fuku_rate - all_fuku_rate
+                        dist_apt_bonus = -dist_diff * 0.5
+                        if dist_diff >= 0.2:
+                            dist_apt_label = f"🔥距離得意({int(dist_fuku_rate*100)}%)"
+                        elif dist_diff <= -0.2:
+                            dist_apt_label = f"❌距離苦手({int(dist_fuku_rate*100)}%)"
+                        else:
+                            dist_apt_label = f"普通({int(dist_fuku_rate*100)}%)"
+
                     list_res_v.append({
                         "馬名": h_n_v, "脚質": style_l, "得意展開": dict_horse_pref_type_v75[h_n_v],
                         "路線変更": str_cross_label if flag_is_cross_surface else "-",
@@ -1173,11 +1217,14 @@ with tab_simulator:
                         "ペース適性": label_pace_apt_v10,
                         "同一レース歴": label_same_race_hist,
                         "RTCトレンド": "🔼上昇中" if rtc_trend_val == "上昇中" else "🔽下降中" if rtc_trend_val == "下降中" else "➡️横ばい",
+                        "距離適性": dist_apt_label,
                         "想定タイム": final_rtc_v, "渋滞": jam_label, 
                         "load": f"{val_avg_load_3r:.1f}", "raw_rtc": final_rtc_v, "解析メモ": df_h_v.iloc[-1]['memo'],
                         "is_cross": flag_is_cross_surface,
                         "course_bonus": course_aptitude_bonus_v9,
-                        "rtc_trend": rtc_trend_val
+                        "rtc_trend": rtc_trend_val,
+                        "std_rtc": val_std_rtc_v10 if not pd.isna(val_std_rtc_v10) else 0.0,
+                        "dist_apt_bonus": dist_apt_bonus,
                     })
                 
                 df_final_v = pd.DataFrame(list_res_v)
@@ -1204,17 +1251,40 @@ with tab_simulator:
                         
                     adj += row.get('course_bonus', 0.0)
 
-                    # RTCトレンド補正: 上昇中は0.15秒短縮・下降中は0.15秒加算
-                    # 大差はつけず、同タイム帯での優先順位付けに使う微小補正
+                    # RTCトレンド補正
                     trend = row.get('rtc_trend', '横ばい')
                     if trend == "上昇中":
                         adj -= 0.15
                     elif trend == "下降中":
                         adj += 0.15
 
+                    # 【機能2】安定度補正: 標準偏差が小さい（安定）馬はボーナス、大きい（ムラ）馬はペナルティ
+                    std_v = row.get('std_rtc', 0.0)
+                    if std_v > 0:
+                        if std_v <= 0.5:
+                            adj -= 0.1
+                        elif std_v >= 1.5:
+                            adj += 0.1
+
+                    # 【機能7】距離適性補正
+                    adj += row.get('dist_apt_bonus', 0.0)
+
                     return row['raw_rtc'] + adj
 
                 df_final_v['synergy_rtc'] = df_final_v.apply(compute_synergy, axis=1)
+
+                # 【機能6】相対評価（フィールド内偏差値）: 出走馬間のsynergy_rtcを偏差値化してソート
+                if len(df_final_v) >= 3:
+                    rtc_mean = df_final_v['synergy_rtc'].mean()
+                    rtc_std = df_final_v['synergy_rtc'].std()
+                    if rtc_std > 0:
+                        # RTCは低い方が良い → 偏差値は高い方が良い（符号反転）
+                        df_final_v['相対偏差値'] = (50 - (df_final_v['synergy_rtc'] - rtc_mean) / rtc_std * 10).round(1)
+                    else:
+                        df_final_v['相対偏差値'] = 50.0
+                else:
+                    df_final_v['相対偏差値'] = 50.0
+
                 df_final_v = df_final_v.sort_values("synergy_rtc")
                 df_final_v['順位'] = range(1, len(df_final_v) + 1)
                 
@@ -1286,9 +1356,9 @@ with tab_simulator:
 
                 # 同一レース歴カラムはレース名入力時のみ表示
                 if val_sim_race_name.strip():
-                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "RTCトレンド", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = ["役割", "順位", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
                 else:
-                    sim_display_cols = ["役割", "順位", "馬名", "予想人気", "期待値", "RTCトレンド", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = ["役割", "順位", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
                 st.table(df_final_v[sim_display_cols].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
