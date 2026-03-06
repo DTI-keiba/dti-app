@@ -1335,49 +1335,66 @@ with tab_simulator:
                 with col_pace_detail4:
                     st.metric("追込", f"{dict_styles['追込']}頭")
                 
-                # 本命(1～3人気)1頭・相手(6～9人気)1頭・相手(10人気以下で力あり)1頭の2点流し or 1点勝負
+                # 軸(1～3人気)1頭・相手(6～10人気)2頭で2点。11人気以下は消しだが能力がかなり上回る馬がいれば1頭入替え。必ず2点で出す。
                 df_1_3 = df_final_v[(df_final_v['予想人気'] >= 1) & (df_final_v['予想人気'] <= 3)].sort_values("synergy_rtc")
-                df_6_9 = df_final_v[(df_final_v['予想人気'] >= 6) & (df_final_v['予想人気'] <= 9)].sort_values("synergy_rtc")
-                df_10_plus = df_final_v[df_final_v['予想人気'] >= 10].sort_values("synergy_rtc")
+                df_6_10 = df_final_v[(df_final_v['予想人気'] >= 6) & (df_final_v['予想人気'] <= 10)].sort_values("synergy_rtc")
+                df_11_plus = df_final_v[df_final_v['予想人気'] >= 11].sort_values("synergy_rtc")
 
                 honmei_name = ""
-                aite_6_9_name = ""
-                aite_10_name = ""
+                aite_names = []
 
                 if not df_1_3.empty:
                     honmei_name = df_1_3.iloc[0]['馬名']
-                if not df_6_9.empty:
-                    aite_6_9_name = df_6_9.iloc[0]['馬名']
 
-                # 10人気以下からは「力が足りる」馬のみ採用（相対偏差値42以上＝フィールド中位以上の実力）
-                if not df_10_plus.empty:
-                    df_10_strong = df_10_plus[df_10_plus['相対偏差値'] >= 42]
-                    if not df_10_strong.empty:
-                        aite_10_name = df_10_strong.iloc[0]['馬名']
+                # 相手は6～10人気から最大2頭（synergy_rtc上位）
+                if len(df_6_10) >= 2:
+                    aite_names = [df_6_10.iloc[0]['馬名'], df_6_10.iloc[1]['馬名']]
+                elif len(df_6_10) == 1:
+                    aite_names = [df_6_10.iloc[0]['馬名']]
+
+                # 11人気以下で能力がかなり上回っている馬（相対偏差値52以上）がいれば、相手の弱い方と入替え
+                if not df_11_plus.empty:
+                    df_11_strong = df_11_plus[df_11_plus['相対偏差値'] >= 52]
+                    if not df_11_strong.empty:
+                        best_11 = df_11_strong.iloc[0]
+                        best_11_rtc = best_11['synergy_rtc']
+                        if len(aite_names) >= 2:
+                            # 2頭目（弱い方）より11+の馬が良ければ入替え
+                            aite2_rtc = df_6_10.iloc[1]['synergy_rtc']
+                            if best_11_rtc < aite2_rtc:
+                                aite_names[1] = best_11['馬名']
+                        elif len(aite_names) == 1:
+                            aite_names.append(best_11['馬名'])
+                        else:
+                            # 6-10に0頭の場合は11+から2頭取る（両方能力ありなら）
+                            if len(df_11_strong) >= 2:
+                                aite_names = [df_11_strong.iloc[0]['馬名'], df_11_strong.iloc[1]['馬名']]
+                            else:
+                                aite_names = [df_11_strong.iloc[0]['馬名']]
 
                 col_rec1, col_rec2 = st.columns(2)
                 with col_rec1:
                     st.subheader("🎯 買い目（馬連・ワイド）")
                     if honmei_name:
-                        lines = [f"**本命（1～3人気）**: {honmei_name}"]
-                        if aite_6_9_name:
-                            lines.append(f"**相手（6～9人気）**: {aite_6_9_name}")
-                        if aite_10_name:
-                            lines.append(f"**相手（10人気以下）**: {aite_10_name}")
-
-                        if aite_6_9_name and aite_10_name:
+                        lines = [f"**軸（1～3人気）**: {honmei_name}"]
+                        if len(aite_names) >= 2:
+                            lines.append(f"**相手①**: {aite_names[0]}")
+                            lines.append(f"**相手②**: {aite_names[1]}")
                             lines.append("")
-                            lines.append("**2点流し**")
-                            lines.append(f"① {honmei_name} × {aite_6_9_name}")
-                            lines.append(f"② {honmei_name} × {aite_10_name}")
-                        elif aite_6_9_name:
+                            lines.append("**2点**")
+                            lines.append(f"① {honmei_name} × {aite_names[0]}")
+                            lines.append(f"② {honmei_name} × {aite_names[1]}")
+                            st.info("\n\n".join(lines))
+                        elif len(aite_names) == 1:
+                            lines.append(f"**相手**: {aite_names[0]}")
                             lines.append("")
-                            lines.append("**1点勝負**（10人気以下に力あり馬なし）")
-                            lines.append(f"{honmei_name} × {aite_6_9_name}")
+                            lines.append("**1点**（2頭目の相手候補なし）")
+                            lines.append(f"{honmei_name} × {aite_names[0]}")
+                            st.info("\n\n".join(lines))
                         else:
                             lines.append("")
-                            lines.append("（6～9人気の馬がいないため買い目を出せません）")
-                        st.info("\n\n".join(lines))
+                            lines.append("（6～10人気に馬がいないため買い目を出せません）")
+                            st.warning("\n\n".join(lines))
                     else:
                         st.warning("1～3人気の馬がいないため買い目を出せません。")
 
