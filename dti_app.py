@@ -310,6 +310,108 @@ def parse_time_string_to_seconds(str_time_input):
         return 0.0
 
 # ==============================================================================
+# 4.5 データ品質ガード（v3: 検証レイヤ）
+# ==============================================================================
+
+def normalize_key_part(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    return str(val).strip()
+
+
+def date_key_from_value(dval):
+    if dval is None or (isinstance(dval, float) and pd.isna(dval)):
+        return ""
+    if hasattr(dval, "strftime"):
+        return dval.strftime("%Y-%m-%d")
+    s = str(dval).strip()
+    return s[:10] if len(s) >= 10 else s
+
+
+def row_duplicate_key_tuple(row):
+    n = normalize_key_part(row.get("name"))
+    lr = normalize_key_part(row.get("last_race"))
+    dk = date_key_from_value(row.get("date"))
+    return (n, dk, lr)
+
+
+def is_valid_rtc_value(br):
+    try:
+        x = float(br)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 < x < 999.0
+
+
+def norm_rtc_for_quality(row):
+    try:
+        br = float(row.get("base_rtc", 0))
+        dist = float(row.get("dist", 0))
+    except (TypeError, ValueError):
+        return None
+    if dist <= 0 or not is_valid_rtc_value(br):
+        return None
+    return br / dist * 1600.0
+
+
+def collect_quality_violations(df_in, horse_names_filter=None):
+    """
+    重複キー (name, date, last_race) と無効RTC・距離0 を違反リストで返す。
+    horse_names_filter があれば該当馬の行のみ対象。
+    """
+    violations = []
+    if df_in is None or df_in.empty:
+        return violations
+    df_q = df_in.copy()
+    if horse_names_filter is not None:
+        df_q = df_q[df_q["name"].isin(horse_names_filter)]
+    if df_q.empty:
+        return violations
+
+    df_q = df_q.copy()
+    df_q["_dup_key"] = df_q.apply(row_duplicate_key_tuple, axis=1)
+    dup_sizes = df_q.groupby("_dup_key", dropna=False).size()
+    for k, cnt in dup_sizes.items():
+        if cnt > 1 and k[0]:
+            violations.append({
+                "code": "DUP_RECORD",
+                "message": f"重複疑い {cnt}行: 馬「{k[0]}」日付{k[1]} レース「{k[2]}」",
+            })
+
+    for idx, row in df_q.iterrows():
+        hname = row.get("name", "")
+        br = row.get("base_rtc")
+        try:
+            br_f = float(br) if not pd.isna(br) else 0.0
+        except (TypeError, ValueError):
+            br_f = 0.0
+        if br_f == 0.0 or pd.isna(br):
+            continue
+        if not is_valid_rtc_value(br_f):
+            violations.append({
+                "code": "RTC_INVALID",
+                "message": f"無効RTC ({br_f}): {hname}",
+            })
+        try:
+            dist_f = float(row.get("dist", 0))
+        except (TypeError, ValueError):
+            dist_f = 0.0
+        if is_valid_rtc_value(br_f) and dist_f <= 0:
+            violations.append({
+                "code": "DIST_INVALID",
+                "message": f"距離0/欠損で正規化不可: {hname}",
+            })
+        nrm = norm_rtc_for_quality(row)
+        if nrm is not None and (nrm < 52.0 or nrm > 220.0):
+            violations.append({
+                "code": "RTC_OUTLIER_NORM",
+                "message": f"正規化RTC異常値 ({nrm:.1f}秒相当): {hname}",
+            })
+
+    return violations
+
+
+# ==============================================================================
 # 5. 係数マスタ詳細定義 (初期設計を1ミリも削らず、100%物理復元)
 # ==============================================================================
 
@@ -895,6 +997,12 @@ with tab_simulator:
                 val_sim_cush = st.slider("想定クッション", 7.0, 12.0, 9.5)
                 val_sim_water = st.slider("想定含水率", 0.0, 30.0, 10.0)
 
+            enforce_quality_sim = st.checkbox(
+                "品質ガード: 無効RTC・距離0の走を換算から除外する（OFF=従来どおり／有効走が無い馬は自動で全走使用）",
+                value=False,
+                key="enforce_quality_sim_v3",
+            )
+
             if st.button("🏁 物理シミュレーション実行"):
                 list_res_v = []
                 num_sim_total = len(sel_multi_h)
@@ -953,40 +1061,53 @@ with tab_simulator:
                     flag_is_cross_surface = False
                     str_cross_label = ""
 
-                    for idx_r, row_r in df_l3_v.iterrows():
-                        p_w_v = 56.0
-                        wm_v = re.search(r'([4-6]\d\.\d)', str(row_r['notes']))
-                        if wm_v: p_w_v = float(wm_v.group(1))
-                        
-                        v_h_bw = 480.0
-                        match_bw = re.search(r'\((\d{3})kg\)', str(row_r['notes']))
-                        if match_bw: v_h_bw = float(match_bw.group(1))
-                        
-                        sens_v = 0.15 if v_h_bw <= 440 else 0.08 if v_h_bw >= 500 else 0.1
-                        w_diff_v = (sim_w_map[h_n_v] - p_w_v) * sens_v
-                        
-                        v_p_v_l_adj = (row_r['load'] - 7.0) * 0.02
-                        v_step1 = (row_r['base_rtc'] + v_p_v_l_adj + w_diff_v)
-                        v_step2 = v_step1 / row_r['dist'] if row_r['dist'] > 0 else v_step1 / 1600.0
-                        v_step_rtc = v_step2 * val_sim_dist
-                        p_v_s_adj = (MASTER_CONFIG_V65_GRADIENT_FACTORS.get(val_sim_course, 0.002) - MASTER_CONFIG_V65_GRADIENT_FACTORS.get(row_r['course'], 0.002)) * val_sim_dist
-                        
-                        past_track_kind = str(row_r.get('track_kind', '芝'))
-                        if pd.isna(past_track_kind) or past_track_kind == 'nan':
-                            past_track_kind = '芝'
+                    for attempt_q in range(2):
+                        use_enforce_rtc = enforce_quality_sim and (attempt_q == 0)
+                        list_conv_rtc_v = []
+                        for idx_r, row_r in df_l3_v.iterrows():
+                            if use_enforce_rtc:
+                                if not is_valid_rtc_value(row_r.get("base_rtc")):
+                                    continue
+                                try:
+                                    if float(row_r.get("dist", 0)) <= 0:
+                                        continue
+                                except (TypeError, ValueError):
+                                    continue
+                            p_w_v = 56.0
+                            wm_v = re.search(r'([4-6]\d\.\d)', str(row_r['notes']))
+                            if wm_v: p_w_v = float(wm_v.group(1))
                             
-                        cross_penalty_v = 0.0
-                        if past_track_kind == "芝" and opt_sim_track == "ダート":
-                            cross_penalty_v = 3.5 * (val_sim_dist / 1600.0)
-                            flag_is_cross_surface = True
-                            str_cross_label = "🔄初ダ"
-                        elif past_track_kind == "ダート" and opt_sim_track == "芝":
-                            cross_penalty_v = -3.5 * (val_sim_dist / 1600.0)
-                            flag_is_cross_surface = True
-                            str_cross_label = "🔄初芝"
-                        
-                        list_conv_rtc_v.append(v_step_rtc + p_v_s_adj + cross_penalty_v)
-                        
+                            v_h_bw = 480.0
+                            match_bw = re.search(r'\((\d{3})kg\)', str(row_r['notes']))
+                            if match_bw: v_h_bw = float(match_bw.group(1))
+                            
+                            sens_v = 0.15 if v_h_bw <= 440 else 0.08 if v_h_bw >= 500 else 0.1
+                            w_diff_v = (sim_w_map[h_n_v] - p_w_v) * sens_v
+                            
+                            v_p_v_l_adj = (row_r['load'] - 7.0) * 0.02
+                            v_step1 = (row_r['base_rtc'] + v_p_v_l_adj + w_diff_v)
+                            v_step2 = v_step1 / row_r['dist'] if row_r['dist'] > 0 else v_step1 / 1600.0
+                            v_step_rtc = v_step2 * val_sim_dist
+                            p_v_s_adj = (MASTER_CONFIG_V65_GRADIENT_FACTORS.get(val_sim_course, 0.002) - MASTER_CONFIG_V65_GRADIENT_FACTORS.get(row_r['course'], 0.002)) * val_sim_dist
+                            
+                            past_track_kind = str(row_r.get('track_kind', '芝'))
+                            if pd.isna(past_track_kind) or past_track_kind == 'nan':
+                                past_track_kind = '芝'
+                                
+                            cross_penalty_v = 0.0
+                            if past_track_kind == "芝" and opt_sim_track == "ダート":
+                                cross_penalty_v = 3.5 * (val_sim_dist / 1600.0)
+                                flag_is_cross_surface = True
+                                str_cross_label = "🔄初ダ"
+                            elif past_track_kind == "ダート" and opt_sim_track == "芝":
+                                cross_penalty_v = -3.5 * (val_sim_dist / 1600.0)
+                                flag_is_cross_surface = True
+                                str_cross_label = "🔄初芝"
+                            
+                            list_conv_rtc_v.append(v_step_rtc + p_v_s_adj + cross_penalty_v)
+                        if list_conv_rtc_v or not use_enforce_rtc:
+                            break
+
                     # 【機能3】トリム平均: 5走以上は最高・最低を1つずつ除外、3〜4走は中央値、1〜2走は単純平均
                     if len(list_conv_rtc_v) >= 5:
                         sorted_rtc = sorted(list_conv_rtc_v)
@@ -1287,6 +1408,22 @@ with tab_simulator:
 
                 df_final_v = df_final_v.sort_values("synergy_rtc")
                 df_final_v['順位'] = range(1, len(df_final_v) + 1)
+                df_final_v['総合順位'] = df_final_v['順位']
+
+                df_final_v['タイム順位'] = df_final_v['raw_rtc'].rank(method="min", ascending=True).astype(int)
+
+                def eval_shift_badge_row(r):
+                    try:
+                        d = int(r['タイム順位']) - int(r['総合順位'])
+                    except Exception:
+                        return "—"
+                    if d >= 3:
+                        return "📈展開・適性で評価↑"
+                    if d <= -3:
+                        return "📉展開・適性で評価↓"
+                    return "—"
+
+                df_final_v['評価ズレ'] = df_final_v.apply(eval_shift_badge_row, axis=1)
                 
                 df_final_v['役割'] = "-"
                 df_final_v.loc[df_final_v['順位'] == 1, '役割'] = "◎"
@@ -1313,6 +1450,15 @@ with tab_simulator:
                 df_bomb = df_final_v[df_final_v['順位'] > 1].sort_values("妙味スコア", ascending=False)
                 if not df_bomb.empty:
                      df_final_v.loc[df_final_v['馬名'] == df_bomb.iloc[0]['馬名'], '役割'] = "★"
+
+                violations_sim = collect_quality_violations(df_t4_f, sel_multi_h)
+                with st.expander("📋 データ品質チェック（今回選択した馬の全履歴）", expanded=False):
+                    st.caption("総合順位＝展開・適性・コース等を含む synergy_rtc 順。タイム順位＝純粋な想定タイム raw_rtc 順。")
+                    if violations_sim:
+                        for v_item in violations_sim:
+                            st.warning(v_item.get("message", str(v_item)))
+                    else:
+                        st.success("重複・無効RTC・距離欠損・正規化異常値の検出はありません。")
 
                 st.markdown("---")
                 st.subheader(f"🏁 展開予想：{str_sim_pace} × {str_sim_race_type_forecast_v75} ({num_sim_total}頭立て)")
@@ -1410,11 +1556,11 @@ with tab_simulator:
                     if row['役割'] == '★': return ['background-color: #ffe6e6; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
-                # 同一レース歴カラムはレース名入力時のみ表示
+                # 同一レース歴カラムはレース名入力時のみ表示（二系統: 総合順位=S・タイム順位=T）
                 if val_sim_race_name.strip():
-                    sim_display_cols = ["役割", "順位", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = ["役割", "総合順位", "タイム順位", "評価ズレ", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
                 else:
-                    sim_display_cols = ["役割", "順位", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = ["役割", "総合順位", "タイム順位", "評価ズレ", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
                 st.table(df_final_v[sim_display_cols].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
@@ -1673,6 +1819,15 @@ with tab_management:
     if st.button("🔄 スプレッドシート強制物理同期 (全破棄)"):
         st.cache_data.clear(); st.rerun()
     df_t6_f = get_db_data()
+
+    st.subheader("🔍 データ品質（全件スキャン）")
+    st.caption("重複（馬名・日付・レース名）、無効RTC、距離0、正規化RTCの異常レンジを検出します。")
+    if st.button("全件データ品質スキャンを実行", key="btn_quality_scan_all"):
+        v_all_q = collect_quality_violations(df_t6_f, None)
+        if v_all_q:
+            st.dataframe(pd.DataFrame(v_all_q), use_container_width=True, hide_index=True)
+        else:
+            st.success("検出なし（重複・無効RTC・距離欠損・正規化異常なし）")
     
     def update_eval_tags_verbose_logic_final_step(row_v, df_ctx_v=None):
         m_r_v = str(row_v['memo']) if not pd.isna(row_v['memo']) else ""
