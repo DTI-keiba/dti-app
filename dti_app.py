@@ -525,6 +525,53 @@ def build_risk_and_reliability_row(row, df_t4_src, sim_dist_m, sim_date_val, vio
     return risk_str, rel
 
 
+def bench_tier_label(rank: int, n: int) -> str:
+    """
+    B: フィールド内での総合順位に基づく能力帯（四分位イメージ）。
+    """
+    if n <= 0:
+        return "—"
+    if n == 1:
+        return "🔹単頭"
+    rk = max(1, int(rank))
+    q1 = max(1, (n + 3) // 4)
+    q2 = max(q1 + 1, (n + 1) // 2)
+    q3 = max(q2 + 1, (3 * n + 3) // 4)
+    if rk <= q1:
+        return "🔹S級（上位枠）"
+    if rk <= q2:
+        return "🔸A級"
+    if rk <= q3:
+        return "▫️B級"
+    return "△C級（下位）"
+
+
+def edge_index_from_inputs(rank: int, n: int, miami_score: float, reliability_stars: str) -> int:
+    """
+    E: 妙味・順位・信頼度を束ねた 0〜100 のエッジ指数。
+    """
+    rel_map = {"★★★": 3, "★★": 2, "★": 1}
+    rm = rel_map.get(str(reliability_stars).strip(), 1)
+    n = max(int(n), 1)
+    rank = max(1, int(rank))
+    pos_pts = (n - rank + 1) / n * 40.0
+    try:
+        m = float(miami_score)
+    except (TypeError, ValueError):
+        m = 0.0
+    miami_pts = min(max(m + 3.0, 0.0), 9.0) / 9.0 * 35.0
+    rel_pts = rm / 3.0 * 25.0
+    return int(min(100, max(0, round(pos_pts + miami_pts + rel_pts))))
+
+
+def edge_label_from_index(idx: int) -> str:
+    if idx >= 72:
+        return "🎯高（妙味寄り）"
+    if idx >= 50:
+        return "➖中"
+    return "⚠️慎重"
+
+
 # ==============================================================================
 # 5. 係数マスタ詳細定義 (初期設計を1ミリも削らず、100%物理復元)
 # ==============================================================================
@@ -1576,6 +1623,27 @@ with tab_simulator:
                 )
                 df_final_v["リスク"] = _risk_rel_series.apply(lambda t: t[0])
                 df_final_v["信頼度"] = _risk_rel_series.apply(lambda t: t[1])
+
+                # B: ベンチマーク（フィールド内級別・1着 synergy との差）
+                _n_field = len(df_final_v)
+                _syn_best = df_final_v["synergy_rtc"].min()
+                df_final_v["対1着差"] = (df_final_v["synergy_rtc"] - _syn_best).round(3)
+                df_final_v["ベンチ帯"] = df_final_v["総合順位"].apply(
+                    lambda rk: bench_tier_label(int(rk), _n_field)
+                )
+
+                # E: エッジ指数・ラベル
+                df_final_v["エッジ指数"] = df_final_v.apply(
+                    lambda r: edge_index_from_inputs(
+                        int(r["総合順位"]),
+                        _n_field,
+                        float(r.get("妙味スコア", 0) or 0),
+                        str(r.get("信頼度", "★")),
+                    ),
+                    axis=1,
+                )
+                df_final_v["エッジ"] = df_final_v["エッジ指数"].apply(edge_label_from_index)
+
                 with st.expander("📋 データ品質チェック（今回選択した馬の全履歴）", expanded=False):
                     st.caption("総合順位＝展開・適性・コース等を含む synergy_rtc 順。タイム順位＝純粋な想定タイム raw_rtc 順。")
                     if violations_sim:
@@ -1597,6 +1665,13 @@ with tab_simulator:
                     )
                     st.caption(
                         "**信頼度（D）**: 有効RTC本数・安定度(std_rtc)・当該馬のデータ品質違反の有無から ★～★★★ を付与。"
+                    )
+                    st.caption(
+                        "**ベンチマーク（B）**: 「ベンチ帯」は同一出走組での総合順位の四分位イメージの級。「対1着差」は "
+                        "synergy_rtc スケール上で先頭馬からの差（小さいほど好位）。"
+                    )
+                    st.caption(
+                        "**エッジ（E）**: 「エッジ指数」は順位・妙味スコア・信頼度を合成した0〜100指標。表下のボタンでCSV保存可能。"
                     )
 
                 # 【機能7】逃げ馬複数警告 & ペース予測根拠を明示表示
@@ -1695,18 +1770,33 @@ with tab_simulator:
                 # 同一レース歴カラムはレース名入力時のみ表示（二系統: 総合順位=S・タイム順位=T）
                 if val_sim_race_name.strip():
                     sim_display_cols = [
-                        "役割", "総合順位", "タイム順位", "評価ズレ", "信頼度", "リスク",
+                        "役割", "総合順位", "ベンチ帯", "対1着差", "タイム順位", "評価ズレ",
+                        "信頼度", "リスク", "エッジ指数", "エッジ",
                         "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名", "予想人気", "期待値",
                         "RTCトレンド", "距離適性", "同一レース歴", "脚質", "得意展開", "ペース適性",
                         "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ",
                     ]
                 else:
                     sim_display_cols = [
-                        "役割", "総合順位", "タイム順位", "評価ズレ", "信頼度", "リスク",
+                        "役割", "総合順位", "ベンチ帯", "対1着差", "タイム順位", "評価ズレ",
+                        "信頼度", "リスク", "エッジ指数", "エッジ",
                         "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名", "予想人気", "期待値",
                         "RTCトレンド", "距離適性", "脚質", "得意展開", "ペース適性",
                         "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ",
                     ]
+                _export_extra = ["synergy_rtc", "raw_rtc", "妙味スコア"]
+                sim_export_cols = [c for c in sim_display_cols if c in df_final_v.columns]
+                for _c in _export_extra:
+                    if _c in df_final_v.columns and _c not in sim_export_cols:
+                        sim_export_cols.append(_c)
+                _csv_name = f"dti_sim_{val_sim_course}_{val_sim_race_date}.csv".replace(" ", "")
+                st.download_button(
+                    label="📥 シミュ結果をCSVで保存（E）",
+                    data=df_final_v[sim_export_cols].to_csv(index=False).encode("utf-8-sig"),
+                    file_name=_csv_name,
+                    mime="text/csv",
+                    key="dti_sim_csv_export_be",
+                )
                 st.table(df_final_v[sim_display_cols].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
