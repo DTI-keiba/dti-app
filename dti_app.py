@@ -411,6 +411,120 @@ def collect_quality_violations(df_in, horse_names_filter=None):
     return violations
 
 
+def compute_synergy_with_pace_row(row, str_pace_for_syn, val_sim_p_mult, str_sim_race_type_forecast_v75):
+    """
+    指定ペースシナリオで synergy_rtc 相当の値を算出（raw_rtc + 各種補正）。
+    str_pace_for_syn: 「ハイ」「スロー」を含むラベルで脚質×ペース項を切替。ミドルは両方含まない文字列。
+    """
+    adj = 0.0
+    if "ハイ" in str_pace_for_syn:
+        if row["脚質"] in ["差し", "追込"]:
+            adj -= 0.2 * val_sim_p_mult
+        elif row["脚質"] == "逃げ":
+            adj += 0.2 * val_sim_p_mult
+    elif "スロー" in str_pace_for_syn:
+        if row["脚質"] in ["逃げ", "先行"]:
+            adj -= 0.2 * val_sim_p_mult
+        elif row["脚質"] in ["差し", "追込"]:
+            adj += 0.2 * val_sim_p_mult
+
+    if str_sim_race_type_forecast_v75 == "瞬発力戦":
+        if row["得意展開"] == "瞬発力":
+            adj -= 0.15
+        elif row["得意展開"] == "持続力":
+            adj += 0.15
+    elif str_sim_race_type_forecast_v75 == "持続力戦":
+        if row["得意展開"] == "持続力":
+            adj -= 0.15
+        elif row["得意展開"] == "瞬発力":
+            adj += 0.15
+
+    adj += row.get("course_bonus", 0.0)
+
+    trend = row.get("rtc_trend", "横ばい")
+    if trend == "上昇中":
+        adj -= 0.15
+    elif trend == "下降中":
+        adj += 0.15
+
+    std_v = row.get("std_rtc", 0.0)
+    if std_v > 0:
+        if std_v <= 0.5:
+            adj -= 0.1
+        elif std_v >= 1.5:
+            adj += 0.1
+
+    adj += row.get("dist_apt_bonus", 0.0)
+    return row["raw_rtc"] + adj
+
+
+def build_risk_and_reliability_row(row, df_t4_src, sim_dist_m, sim_date_val, violations_list, rank_hi, rank_mid, rank_sl):
+    """
+    C: リスク列 / D: 信頼度（★）を生成。
+    """
+    hn = row.get("馬名", "")
+    dfh = df_t4_src[df_t4_src["name"] == hn].sort_values("date")
+    risks = []
+
+    n_valid = 0
+    if not dfh.empty:
+        mask_v = (dfh["base_rtc"] > 0) & (dfh["base_rtc"] < 999)
+        n_valid = int(mask_v.sum())
+
+    if n_valid < 3:
+        risks.append("データ薄")
+
+    if not dfh.empty:
+        last_row = dfh.iloc[-1]
+        last_d = last_row.get("date")
+        if pd.notna(last_d):
+            try:
+                ld = pd.Timestamp(last_d).date()
+                gap_days = (sim_date_val - ld).days
+                if gap_days > 100:
+                    risks.append("長期休養明け")
+                elif gap_days >= 0 and gap_days <= 14:
+                    risks.append("間隔短め")
+            except Exception:
+                pass
+        try:
+            last_dist = float(last_row.get("dist", 0))
+            if last_dist > 0 and abs(last_dist - float(sim_dist_m)) >= 400:
+                risks.append("距離大幅変更")
+        except (TypeError, ValueError):
+            pass
+
+    road = str(row.get("路線変更", ""))
+    if "初" in road or "🔄" in road:
+        risks.append("表面転換")
+
+    ev_z = str(row.get("評価ズレ", ""))
+    if "展開・適性で評価↓" in ev_z:
+        risks.append("展開・適性注意")
+
+    try:
+        rh, rm, rs = int(rank_hi), int(rank_mid), int(rank_sl)
+        if max(rh, rm, rs) - min(rh, rm, rs) >= 4:
+            risks.append("展開一点物")
+    except Exception:
+        pass
+
+    risk_str = "／".join(risks) if risks else "—"
+
+    horse_violations = [v for v in violations_list if hn and hn in str(v.get("message", ""))]
+    has_violation = len(horse_violations) > 0
+    std_rtc = float(row.get("std_rtc", 0) or 0)
+
+    if n_valid >= 5 and std_rtc <= 0.7 and not has_violation:
+        rel = "★★★"
+    elif n_valid >= 3 and not has_violation:
+        rel = "★★"
+    else:
+        rel = "★"
+
+    return risk_str, rel
+
+
 # ==============================================================================
 # 5. 係数マスタ詳細定義 (初期設計を1ミリも削らず、100%物理復元)
 # ==============================================================================
@@ -993,6 +1107,7 @@ with tab_simulator:
                 val_sim_dist = st.selectbox("次走距離", list_dist_range_opts_actual_f if 'list_dist_range_opts_actual_f' in locals() else [1600], index=0)
                 opt_sim_track = st.radio("次走種別", ["芝", "ダート"], horizontal=True)
                 val_sim_race_name = st.text_input("次走レース名（任意・同一レース歴を検索）", value="", placeholder="例: 天皇賞秋、有馬記念")
+                val_sim_race_date = st.date_input("想定レース日（休養間隔・リスク判定）", datetime.now().date(), key="sim_race_date_acd")
             with c_sc_2:
                 val_sim_cush = st.slider("想定クッション", 7.0, 12.0, 9.5)
                 val_sim_water = st.slider("想定含水率", 0.0, 30.0, 10.0)
@@ -1351,48 +1466,12 @@ with tab_simulator:
                 df_final_v = pd.DataFrame(list_res_v)
                 
                 val_sim_p_mult = 1.5 if num_sim_total >= 15 else 1.0
-                def compute_synergy(row):
-                    adj = 0.0
-                    if "ハイ" in str_sim_pace:
-                        if row['脚質'] in ["差し", "追込"]: adj -= 0.2 * val_sim_p_mult
-                        elif row['脚質'] == "逃げ": adj += 0.2 * val_sim_p_mult
-                    elif "スロー" in str_sim_pace:
-                        if row['脚質'] in ["逃げ", "先行"]: adj -= 0.2 * val_sim_p_mult
-                        elif row['脚質'] in ["差し", "追込"]: adj += 0.2 * val_sim_p_mult
-                    
-                    if str_sim_race_type_forecast_v75 == "瞬発力戦":
-                        if row['得意展開'] == "瞬発力": adj -= 0.15
-                        elif row['得意展開'] == "持続力": adj += 0.15
-                    elif str_sim_race_type_forecast_v75 == "持続力戦":
-                        if row['得意展開'] == "持続力": adj -= 0.15
-                        elif row['得意展開'] == "瞬発力": adj += 0.15
-                        
-                    if row.get('is_cross', False):
-                        adj += 0.0
-                        
-                    adj += row.get('course_bonus', 0.0)
-
-                    # RTCトレンド補正
-                    trend = row.get('rtc_trend', '横ばい')
-                    if trend == "上昇中":
-                        adj -= 0.15
-                    elif trend == "下降中":
-                        adj += 0.15
-
-                    # 【機能2】安定度補正: 標準偏差が小さい（安定）馬はボーナス、大きい（ムラ）馬はペナルティ
-                    std_v = row.get('std_rtc', 0.0)
-                    if std_v > 0:
-                        if std_v <= 0.5:
-                            adj -= 0.1
-                        elif std_v >= 1.5:
-                            adj += 0.1
-
-                    # 【機能7】距離適性補正
-                    adj += row.get('dist_apt_bonus', 0.0)
-
-                    return row['raw_rtc'] + adj
-
-                df_final_v['synergy_rtc'] = df_final_v.apply(compute_synergy, axis=1)
+                df_final_v["synergy_rtc"] = df_final_v.apply(
+                    lambda r: compute_synergy_with_pace_row(
+                        r, str_sim_pace, val_sim_p_mult, str_sim_race_type_forecast_v75
+                    ),
+                    axis=1,
+                )
 
                 # 【機能6】相対評価（フィールド内偏差値）: 出走馬間のsynergy_rtcを偏差値化してソート
                 if len(df_final_v) >= 3:
@@ -1424,6 +1503,30 @@ with tab_simulator:
                     return "—"
 
                 df_final_v['評価ズレ'] = df_final_v.apply(eval_shift_badge_row, axis=1)
+
+                # A: シナリオ別順位（ハイ想定 / ミドル固定 / スロー想定）— 同一フィールド内で synergy 相当値の順位
+                df_final_v["_syn_hi"] = df_final_v.apply(
+                    lambda r: compute_synergy_with_pace_row(
+                        r, "ハイペース傾向", val_sim_p_mult, str_sim_race_type_forecast_v75
+                    ),
+                    axis=1,
+                )
+                df_final_v["_syn_mid"] = df_final_v.apply(
+                    lambda r: compute_synergy_with_pace_row(
+                        r, "ミドルペース", val_sim_p_mult, str_sim_race_type_forecast_v75
+                    ),
+                    axis=1,
+                )
+                df_final_v["_syn_sl"] = df_final_v.apply(
+                    lambda r: compute_synergy_with_pace_row(
+                        r, "スローペース傾向", val_sim_p_mult, str_sim_race_type_forecast_v75
+                    ),
+                    axis=1,
+                )
+                df_final_v["順位(ハイ)"] = df_final_v["_syn_hi"].rank(method="min", ascending=True).astype(int)
+                df_final_v["順位(ミドル)"] = df_final_v["_syn_mid"].rank(method="min", ascending=True).astype(int)
+                df_final_v["順位(スロー)"] = df_final_v["_syn_sl"].rank(method="min", ascending=True).astype(int)
+                df_final_v.drop(columns=["_syn_hi", "_syn_mid", "_syn_sl"], inplace=True)
                 
                 df_final_v['役割'] = "-"
                 df_final_v.loc[df_final_v['順位'] == 1, '役割'] = "◎"
@@ -1452,6 +1555,27 @@ with tab_simulator:
                      df_final_v.loc[df_final_v['馬名'] == df_bomb.iloc[0]['馬名'], '役割'] = "★"
 
                 violations_sim = collect_quality_violations(df_t4_f, sel_multi_h)
+
+                try:
+                    vsd_sim = float(val_sim_dist)
+                except (TypeError, ValueError):
+                    vsd_sim = 1600.0
+
+                _risk_rel_series = df_final_v.apply(
+                    lambda r: build_risk_and_reliability_row(
+                        r,
+                        df_t4_f,
+                        vsd_sim,
+                        val_sim_race_date,
+                        violations_sim,
+                        r["順位(ハイ)"],
+                        r["順位(ミドル)"],
+                        r["順位(スロー)"],
+                    ),
+                    axis=1,
+                )
+                df_final_v["リスク"] = _risk_rel_series.apply(lambda t: t[0])
+                df_final_v["信頼度"] = _risk_rel_series.apply(lambda t: t[1])
                 with st.expander("📋 データ品質チェック（今回選択した馬の全履歴）", expanded=False):
                     st.caption("総合順位＝展開・適性・コース等を含む synergy_rtc 順。タイム順位＝純粋な想定タイム raw_rtc 順。")
                     if violations_sim:
@@ -1462,6 +1586,18 @@ with tab_simulator:
 
                 st.markdown("---")
                 st.subheader(f"🏁 展開予想：{str_sim_pace} × {str_sim_race_type_forecast_v75} ({num_sim_total}頭立て)")
+
+                with st.expander("📊 シナリオ別順位（A）の見方", expanded=False):
+                    st.caption(
+                        "「順位(ハイ)」「順位(ミドル)」「順位(スロー)」は、同一出走メンバー内で **脚質×ペース補正のみ** を "
+                        "ハイ／ミドル固定／スローに切り替えたときの順位です。総合順位・◎〇▲は **自動判定ペース** に基づく synergy_rtc です。"
+                    )
+                    st.caption(
+                        "**リスク（C）**: データ薄・休養間隔・距離変更・表面転換・評価ズレ・3シナリオで順位が大きく動く「展開一点物」などをルールで表示。"
+                    )
+                    st.caption(
+                        "**信頼度（D）**: 有効RTC本数・安定度(std_rtc)・当該馬のデータ品質違反の有無から ★～★★★ を付与。"
+                    )
 
                 # 【機能7】逃げ馬複数警告 & ペース予測根拠を明示表示
                 if dict_styles["逃げ"] >= 2:
@@ -1558,9 +1694,19 @@ with tab_simulator:
 
                 # 同一レース歴カラムはレース名入力時のみ表示（二系統: 総合順位=S・タイム順位=T）
                 if val_sim_race_name.strip():
-                    sim_display_cols = ["役割", "総合順位", "タイム順位", "評価ズレ", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "同一レース歴", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = [
+                        "役割", "総合順位", "タイム順位", "評価ズレ", "信頼度", "リスク",
+                        "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名", "予想人気", "期待値",
+                        "RTCトレンド", "距離適性", "同一レース歴", "脚質", "得意展開", "ペース適性",
+                        "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ",
+                    ]
                 else:
-                    sim_display_cols = ["役割", "総合順位", "タイム順位", "評価ズレ", "相対偏差値", "馬名", "予想人気", "期待値", "RTCトレンド", "距離適性", "脚質", "得意展開", "ペース適性", "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ"]
+                    sim_display_cols = [
+                        "役割", "総合順位", "タイム順位", "評価ズレ", "信頼度", "リスク",
+                        "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名", "予想人気", "期待値",
+                        "RTCトレンド", "距離適性", "脚質", "得意展開", "ペース適性",
+                        "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ",
+                    ]
                 st.table(df_final_v[sim_display_cols].style.apply(highlight_role, axis=1))
 
 # ==============================================================================
