@@ -543,14 +543,14 @@ def classify_buy_pattern_type(row, n_field: int) -> str:
     try:
         sou = int(row["総合順位"])
         tr = int(row["タイム順位"])
-        gap = float(row.get("妙味スコア", 0) or 0)
     except Exception:
         return "—"
     top_lim = 3 if n_field <= 6 else 4
     if sou == 1 and max(rh, rm, rs) <= top_lim:
         return "型A：本命×シナリオ安定"
-    if tr <= 3 and gap >= 2:
-        return "型B：タイム上位×妙味"
+    # 人気入力なし：タイムは上位だが総合が落ちている＝展開・適性で損している想定
+    if tr <= 3 and sou >= 4:
+        return "型B：タイム上位×総合遅れ"
     return "—"
 
 
@@ -1109,25 +1109,13 @@ with tab_simulator:
         sel_multi_h = st.multiselect("対象馬を物理選択", list_h_names_v)
         sim_w_map = {}
         sim_g_map = {}
-        sim_p_map = {}
         
         if sel_multi_h:
-            st.markdown("##### 📝 個別物理パラメータ入力")
+            st.markdown("##### 📝 個別物理パラメータ入力（枠・斤量）")
             grid_sim = st.columns(min(len(sel_multi_h), 4))
             for i_h, h_i in enumerate(sel_multi_h):
                 with grid_sim[i_h % 4]:
-                    h_lat_data = df_t4_f[df_t4_f['name'] == h_i].iloc[-1]
                     sim_g_map[h_i] = st.number_input(f"{h_i} 枠", 1, 18, value=1, key=f"g_sim_{h_i}")
-                    
-                    val_raw_pop_sim_f = 10
-                    if not pd.isna(h_lat_data['result_pop']):
-                        try: val_raw_pop_sim_f = int(h_lat_data['result_pop'])
-                        except: val_raw_pop_sim_f = 10
-                    val_safe_pop_sim_f = val_raw_pop_sim_f
-                    if val_safe_pop_sim_f < 1: val_safe_pop_sim_f = 1
-                    if val_safe_pop_sim_f > 18: val_safe_pop_sim_f = 18
-                        
-                    sim_p_map[h_i] = st.number_input(f"{h_i} 人気", 1, 18, value=val_safe_pop_sim_f, key=f"p_sim_{h_i}")
                     sim_w_map[h_i] = st.number_input(f"{h_i} 斤量", 48.0, 62.0, 56.0, step=0.5, key=f"w_sim_{h_i}")
             
             c_sc_1, c_sc_2 = st.columns(2)
@@ -1562,26 +1550,10 @@ with tab_simulator:
                 df_final_v.loc[df_final_v['順位'] == 2, '役割'] = "〇"
                 df_final_v.loc[df_final_v['順位'] == 3, '役割'] = "▲"
                 
-                df_final_v['予想人気'] = df_final_v['馬名'].map(sim_p_map)
-                df_final_v['妙味スコア'] = df_final_v['予想人気'] - df_final_v['順位']
-                
-                # 🌟 【新機能4】推定オッズ乖離・期待値判定
-                def evaluate_expected_value_v10(row):
-                    gap = row['妙味スコア']
-                    if row['順位'] <= 3 and row['予想人気'] >= 6:
-                        return "🔥爆・期待値最高（看過妙味）"
-                    elif gap >= 3:
-                        return "📈妙味あり（モデル>人気）"
-                    elif gap <= -3:
-                        return "⚠️過剰人気注意（人気>モデル）"
-                    else:
-                        return "妥当"
-
-                df_final_v['期待値'] = df_final_v.apply(evaluate_expected_value_v10, axis=1)
-                
-                df_bomb = df_final_v[df_final_v['順位'] > 1].sort_values("妙味スコア", ascending=False)
+                # ★：総合1着以外で相対偏差値が最も高い馬（フィールド内で能力は高いが本命ではない目印）
+                df_bomb = df_final_v[df_final_v["順位"] > 1].sort_values("相対偏差値", ascending=False)
                 if not df_bomb.empty:
-                     df_final_v.loc[df_final_v['馬名'] == df_bomb.iloc[0]['馬名'], '役割'] = "★"
+                    df_final_v.loc[df_final_v["馬名"] == df_bomb.iloc[0]["馬名"], "役割"] = "★"
 
                 violations_sim = collect_quality_violations(df_t4_f, sel_multi_h)
 
@@ -1634,12 +1606,8 @@ with tab_simulator:
                         "**信頼度（D）**: 有効RTC本数・安定度(std_rtc)・当該馬のデータ品質違反の有無から ★～★★★ を付与。"
                     )
                     st.caption(
-                        "**市場緊張度（B）**: 下の固定リストで「モデル上位×人気下位（看過妙味）」と「過剰人気注意」を切り分け。"
-                        "妙味スコア・期待値列と併用してください。"
-                    )
-                    st.caption(
-                        "**買い筋の型（E）**: 「型A」本命×3シナリオ安定、「型B」タイム上位×妙味、「型C」展開一点物。"
-                        "今日はどの型で攻めるかの目安に。"
+                        "**買い筋の型（E）**: 「型A」本命×3シナリオ安定、「型B」タイム上位だが総合順位は下（展開・適性で損）、「型C」展開一点物。"
+                        "人気は入力しない運用のため、市場緊張度（B）リストは表示していません。"
                     )
 
                 # 【機能7】逃げ馬複数警告 & ペース予測根拠を明示表示
@@ -1660,110 +1628,6 @@ with tab_simulator:
                 with col_pace_detail4:
                     st.metric("追込", f"{dict_styles['追込']}頭")
 
-                st.markdown("---")
-                st.subheader("📈 市場緊張度（B：モデル vs 人気）")
-                st.caption(
-                    "オッズ推定が粗くても、「総合順位」と「予想人気」のズレ（妙味スコア）で回収の芯を確認します。"
-                )
-                df_b_kanko = df_final_v[
-                    ((df_final_v["総合順位"] <= 5) & (df_final_v["予想人気"] >= 6))
-                    | (df_final_v["妙味スコア"] >= 3)
-                ].sort_values(["総合順位", "予想人気"])
-                df_b_kako = df_final_v[
-                    ((df_final_v["予想人気"] <= 3) & (df_final_v["総合順位"] >= 5))
-                    | (df_final_v["妙味スコア"] <= -3)
-                ].sort_values(["予想人気", "総合順位"])
-
-                col_b1, col_b2 = st.columns(2)
-                with col_b1:
-                    st.markdown("##### 看過妙味候補（モデル上位 × 人気薄め）")
-                    if df_b_kanko.empty:
-                        st.info("該当なし")
-                    else:
-                        for _, rr in df_b_kanko.iterrows():
-                            st.success(
-                                f"**{rr['馬名']}** ｜ 総合{int(rr['総合順位'])}着・人気{int(rr['予想人気'])}番 ｜ {rr['期待値']}\n\n"
-                                "_看過妙味：モデル評価は上なのに人気が乗りきっていない。順位差のランキングとして芯を確認。_"
-                            )
-                with col_b2:
-                    st.markdown("##### 過剰人気・注意リスト")
-                    if df_b_kako.empty:
-                        st.info("該当なし")
-                    else:
-                        for _, rr in df_b_kako.iterrows():
-                            st.warning(
-                                f"**{rr['馬名']}** ｜ 総合{int(rr['総合順位'])}着・人気{int(rr['予想人気'])}番 ｜ {rr['期待値']}\n\n"
-                                "_過剰人気注意：人気先行だがモデル順位は低め。オッズ割高感を疑う。_"
-                            )
-                
-                # 軸(1～3人気)1頭・相手(6～10人気)2頭で2点。11人気以下は消しだが能力がかなり上回る馬がいれば1頭入替え。必ず2点で出す。
-                df_1_3 = df_final_v[(df_final_v['予想人気'] >= 1) & (df_final_v['予想人気'] <= 3)].sort_values("synergy_rtc")
-                df_6_10 = df_final_v[(df_final_v['予想人気'] >= 6) & (df_final_v['予想人気'] <= 10)].sort_values("synergy_rtc")
-                df_11_plus = df_final_v[df_final_v['予想人気'] >= 11].sort_values("synergy_rtc")
-
-                honmei_name = ""
-                aite_names = []
-
-                if not df_1_3.empty:
-                    honmei_name = df_1_3.iloc[0]['馬名']
-
-                # 相手は6～10人気から最大2頭（synergy_rtc上位）
-                if len(df_6_10) >= 2:
-                    aite_names = [df_6_10.iloc[0]['馬名'], df_6_10.iloc[1]['馬名']]
-                elif len(df_6_10) == 1:
-                    aite_names = [df_6_10.iloc[0]['馬名']]
-
-                # 11人気以下で能力がかなり上回っている馬（相対偏差値52以上）がいれば、相手の弱い方と入替え
-                if not df_11_plus.empty:
-                    df_11_strong = df_11_plus[df_11_plus['相対偏差値'] >= 52]
-                    if not df_11_strong.empty:
-                        best_11 = df_11_strong.iloc[0]
-                        best_11_rtc = best_11['synergy_rtc']
-                        if len(aite_names) >= 2:
-                            # 2頭目（弱い方）より11+の馬が良ければ入替え
-                            aite2_rtc = df_6_10.iloc[1]['synergy_rtc']
-                            if best_11_rtc < aite2_rtc:
-                                aite_names[1] = best_11['馬名']
-                        elif len(aite_names) == 1:
-                            aite_names.append(best_11['馬名'])
-                        else:
-                            # 6-10に0頭の場合は11+から2頭取る（両方能力ありなら）
-                            if len(df_11_strong) >= 2:
-                                aite_names = [df_11_strong.iloc[0]['馬名'], df_11_strong.iloc[1]['馬名']]
-                            else:
-                                aite_names = [df_11_strong.iloc[0]['馬名']]
-
-                col_rec1, col_rec2 = st.columns(2)
-                with col_rec1:
-                    st.subheader("🎯 買い目（馬連・ワイド）")
-                    if honmei_name:
-                        lines = [f"**軸（1～3人気）**: {honmei_name}"]
-                        if len(aite_names) >= 2:
-                            lines.append(f"**相手①**: {aite_names[0]}")
-                            lines.append(f"**相手②**: {aite_names[1]}")
-                            lines.append("")
-                            lines.append("**2点**")
-                            lines.append(f"① {honmei_name} × {aite_names[0]}")
-                            lines.append(f"② {honmei_name} × {aite_names[1]}")
-                            st.info("\n\n".join(lines))
-                        elif len(aite_names) == 1:
-                            lines.append(f"**相手**: {aite_names[0]}")
-                            lines.append("")
-                            lines.append("**1点**（2頭目の相手候補なし）")
-                            lines.append(f"{honmei_name} × {aite_names[0]}")
-                            st.info("\n\n".join(lines))
-                        else:
-                            lines.append("")
-                            lines.append("（6～10人気に馬がいないため買い目を出せません）")
-                            st.warning("\n\n".join(lines))
-                    else:
-                        st.warning("1～3人気の馬がいないため買い目を出せません。")
-
-                with col_rec2:
-                    bomb_name = df_final_v[df_final_v['役割'] == "★"].iloc[0]['馬名'] if not df_final_v[df_final_v['役割'] == "★"].empty else ""
-                    if honmei_name and bomb_name:
-                        st.warning(f"**💣 妙味狙いワイド 1点**\n\n◎ {honmei_name} － ★ {bomb_name}")
-
                 df_final_v['想定タイム'] = df_final_v['raw_rtc'].apply(format_time_to_hmsf_string)
                 
                 def highlight_role(row):
@@ -1776,7 +1640,7 @@ with tab_simulator:
                     sim_display_cols = [
                         "役割", "総合順位", "買い筋型", "タイム順位", "評価ズレ",
                         "信頼度", "リスク",
-                        "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名", "予想人気", "妙味スコア", "期待値",
+                        "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名",
                         "RTCトレンド", "距離適性", "同一レース歴", "脚質", "得意展開", "ペース適性",
                         "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ",
                     ]
@@ -1784,7 +1648,7 @@ with tab_simulator:
                     sim_display_cols = [
                         "役割", "総合順位", "買い筋型", "タイム順位", "評価ズレ",
                         "信頼度", "リスク",
-                        "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名", "予想人気", "妙味スコア", "期待値",
+                        "順位(ハイ)", "順位(ミドル)", "順位(スロー)", "相対偏差値", "馬名",
                         "RTCトレンド", "距離適性", "脚質", "得意展開", "ペース適性",
                         "路線変更", "コース適性", "安定度", "鬼脚", "渋滞", "load", "想定タイム", "解析メモ",
                     ]
