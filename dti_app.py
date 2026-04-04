@@ -232,6 +232,11 @@ def get_db_data():
     """データベース取得用のエントリポイント。キャッシュ管理された関数を詳細に呼び出します。"""
     return get_db_data_cached()
 
+
+def invalidate_db_read_cache():
+    """書き込み後に一覧を最新化するため、DB読み込みキャッシュのみ無効化（全キャッシュ一括clearは避ける）。"""
+    get_db_data_cached.clear()
+
 # ==============================================================================
 # 3. データベース更新詳細ロジック (同期性能を極大化した物理書き込み)
 # ==============================================================================
@@ -264,12 +269,12 @@ def safe_update(df_sync_target):
     for i_attempt_counter in range(physical_max_attempts):
         try:
             conn.update(data=df_sync_target)
-            st.cache_data.clear()
+            invalidate_db_read_cache()
             return True
         except Exception as e_sheet_save_critical:
-            failure_wait_duration = 5
+            failure_wait_duration = 2
             if i_attempt_counter < physical_max_attempts - 1:
-                st.warning(f"Google Sheetsとの同期に失敗しました(リトライ {i_attempt_counter+1}/3)... {failure_wait_duration}秒後に再実行します。")
+                st.warning(f"Google Sheetsとの同期に失敗しました(リトライ {i_attempt_counter+1}/3)... {failure_wait_duration}秒待機して再試行します。")
                 time.sleep(failure_wait_duration)
                 continue
             else:
@@ -924,14 +929,20 @@ with tab_main_analysis:
                     })
                 
                 if list_new_sync_rows_tab1_v6_final:
-                    st.cache_data.clear()
-                    df_sheet_latest_v = conn.read(ttl=0)
-                    for col_norm_f in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
-                        if col_norm_f not in df_sheet_latest_v.columns: df_sheet_latest_v[col_norm_f] = None
-                    df_final_sync_v = pd.concat([df_sheet_latest_v, pd.DataFrame(list_new_sync_rows_tab1_v6_final)], ignore_index=True)
-                    if safe_update(df_final_sync_v):
+                    with st.spinner("スプレッドシートへ同期中…"):
+                        invalidate_db_read_cache()
+                        df_sheet_latest_v = conn.read(ttl=0)
+                        for col_norm_f in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
+                            if col_norm_f not in df_sheet_latest_v.columns:
+                                df_sheet_latest_v[col_norm_f] = None
+                        df_final_sync_v = pd.concat(
+                            [df_sheet_latest_v, pd.DataFrame(list_new_sync_rows_tab1_v6_final)], ignore_index=True
+                        )
+                        ok_sync = safe_update(df_final_sync_v)
+                    if ok_sync:
                         st.session_state.state_tab1_preview_is_active_f = False
-                        st.success(f"✅ 解析・同期保存が物理的に完了しました。"); st.rerun()
+                        st.success("✅ 解析・同期保存が物理的に完了しました。")
+                        st.rerun()
 
 # ==============================================================================
 # 8. Tab 2: 馬別履歴詳細 & 個別メンテナンス
@@ -967,8 +978,11 @@ with tab_horse_history:
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'memo'] = new_memo_t2_v6_val
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'next_buy_flag'] = new_flag_t2_v6_val
                     df_t2_source_v6.at[target_idx_t2_f_actual, 'track_kind'] = new_kind_t2_v6_val
-                    if safe_update(df_t2_source_v6):
-                        st.success(f"【{val_sel_target_h_t2_v6}】同期成功"); st.rerun()
+                    with st.spinner("スプレッドシートへ保存中…"):
+                        ok_t2 = safe_update(df_t2_source_v6)
+                    if ok_t2:
+                        st.success(f"【{val_sel_target_h_t2_v6}】同期成功")
+                        st.rerun()
 
         # ==============================================================================
         # 【機能3】RTC推移分析 / ピーク時期予測 / 距離適性テーブル
@@ -1092,7 +1106,11 @@ with tab_race_history:
                         df_t3_f.at[i_v, 'result_pos'] = row_v['result_pos']
                         df_t3_f.at[i_v, 'result_pop'] = row_v['result_pop']
                         df_t3_f.at[i_v, 'track_kind'] = row_v['track_kind']
-                    if safe_update(df_t3_f): st.success("同期完了"); st.rerun()
+                    with st.spinner("スプレッドシートへ保存中…"):
+                        ok_t3 = safe_update(df_t3_f)
+                    if ok_t3:
+                        st.success("同期完了")
+                        st.rerun()
             df_t3_fmt = df_sub_v.copy()
             df_t3_fmt['base_rtc'] = df_t3_fmt['base_rtc'].apply(format_time_to_hmsf_string)
             st.dataframe(df_t3_fmt[["name", "notes", "track_kind", "track_week", "race_type", "base_rtc", "f3f", "l3f", "race_l3f", "result_pos", "result_pop"]], use_container_width=True)
@@ -1908,7 +1926,8 @@ with tab_backtest:
 with tab_management:
     st.header("🗑 物理管理 & 再解析工程詳細")
     if st.button("🔄 スプレッドシート強制物理同期 (全破棄)"):
-        st.cache_data.clear(); st.rerun()
+        invalidate_db_read_cache()
+        st.rerun()
     df_t6_f = get_db_data()
 
     st.subheader("🔍 データ品質（全件スキャン）")
@@ -1920,7 +1939,10 @@ with tab_management:
         else:
             st.success("検出なし（重複・無効RTC・距離欠損・正規化異常なし）")
     
-    def update_eval_tags_verbose_logic_final_step(row_v, df_ctx_v=None):
+    def update_eval_tags_verbose_logic_final_step(row_v, df_ctx_v=None, race_subset_df=None):
+        """
+        race_subset_df: 同一 last_race の行だけをまとめた DataFrame（全件再計算時は groupby で渡し、O(n²) フィルタを避ける）
+        """
         m_r_v = str(row_v['memo']) if not pd.isna(row_v['memo']) else ""
         def to_f_v(v_in, default=0.0):
             try: return float(v_in) if not pd.isna(v_in) else default
@@ -1948,8 +1970,14 @@ with tab_management:
         pace_gap_v = f3f_v - race_l3f_v
         
         bt_label_v = "フラット"; mx_field_v = 16
-        if df_ctx_v is not None and not pd.isna(row_v['last_race']):
+        if race_subset_df is not None:
+            rc_sub_v = race_subset_df
+        elif df_ctx_v is not None and not pd.isna(row_v.get('last_race')):
             rc_sub_v = df_ctx_v[df_ctx_v['last_race'] == row_v['last_race']]
+        else:
+            rc_sub_v = pd.DataFrame()
+
+        if not rc_sub_v.empty:
             mx_field_v = rc_sub_v['result_pos'].max() if not rc_sub_v.empty else 16
             
             top3_v = rc_sub_v[rc_sub_v['result_pos'] <= 3].copy()
@@ -2020,16 +2048,30 @@ with tab_management:
         return mu_final_v, str(row_v['next_buy_flag']), new_rtc_v
 
     if st.button("🔄 物理データベース全記録の再計算・物理同期"):
-        st.cache_data.clear()
-        latest_df_v = conn.read(ttl=0)
-        for c_nm in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
-            if c_nm not in latest_df_v.columns: latest_df_v[c_nm] = None
-        for idx_sy, row_sy in latest_df_v.iterrows():
-            m_res, f_res, rtc_res = update_eval_tags_verbose_logic_final_step(row_sy, latest_df_v)
-            latest_df_v.at[idx_sy, 'memo'] = m_res
-            latest_df_v.at[idx_sy, 'next_buy_flag'] = f_res
-            latest_df_v.at[idx_sy, 'base_rtc'] = rtc_res
-        if safe_update(latest_df_v): st.success("全履歴の真・再解析成功"); st.rerun()
+        with st.spinner("全件再計算中（レース単位バッチ・シート書き込み）…"):
+            invalidate_db_read_cache()
+            latest_df_v = conn.read(ttl=0)
+            for c_nm in ABSOLUTE_COLUMN_STRUCTURE_DEFINITION_GLOBAL:
+                if c_nm not in latest_df_v.columns:
+                    latest_df_v[c_nm] = None
+            idx_order = []
+            memos, flags, rtcs = [], [], []
+            for _, rc_grp in latest_df_v.groupby("last_race", dropna=False):
+                for idx_sy, row_sy in rc_grp.iterrows():
+                    m_res, f_res, rtc_res = update_eval_tags_verbose_logic_final_step(
+                        row_sy, df_ctx_v=None, race_subset_df=rc_grp
+                    )
+                    idx_order.append(idx_sy)
+                    memos.append(m_res)
+                    flags.append(f_res)
+                    rtcs.append(rtc_res)
+            latest_df_v.loc[idx_order, "memo"] = memos
+            latest_df_v.loc[idx_order, "next_buy_flag"] = flags
+            latest_df_v.loc[idx_order, "base_rtc"] = rtcs
+            ok_recalc = safe_update(latest_df_v)
+        if ok_recalc:
+            st.success("全履歴の真・再解析成功")
+            st.rerun()
 
     if not df_t6_f.empty:
         st.subheader("🛠️ 物理エディタ同期修正工程")
@@ -2043,7 +2085,11 @@ with tab_management:
         if st.button("💾 エディタ修正内容を同期確定保存"):
             sdf_f_v = edf_f_v.copy()
             sdf_f_v['base_rtc'] = sdf_f_v['base_rtc'].apply(parse_time_string_to_seconds)
-            if safe_update(sdf_f_v): st.success("物理同期完了"); st.rerun()
+            with st.spinner("スプレッドシートへ保存中…"):
+                ok_ed = safe_update(sdf_f_v)
+            if ok_ed:
+                st.success("物理同期完了")
+                st.rerun()
         
         st.divider(); st.subheader("❌ 物理全抹消詳細設定")
         cd1_v, cd2_v = st.columns(2)
@@ -2051,9 +2097,15 @@ with tab_management:
             list_r_v = sorted([str(x) for x in df_t6_f['last_race'].dropna().unique()])
             tr_del_v = st.selectbox("抹消レース物理選択", ["未選択"] + list_r_v)
             if tr_del_v != "未選択" and st.button(f"🚨 レース単位抹消実行"):
-                if safe_update(df_t6_f[df_t6_f['last_race'] != tr_del_v]): st.rerun()
+                with st.spinner("スプレッドシートを更新中…"):
+                    ok_del_r = safe_update(df_t6_f[df_t6_f['last_race'] != tr_del_v])
+                if ok_del_r:
+                    st.rerun()
         with cd2_v:
             list_h_v = sorted([str(x) for x in df_t6_f['name'].dropna().unique()])
             target_h_multi_v = st.multiselect("抹消対象馬物理選択 (複数可)", list_h_v)
             if target_h_multi_v and st.button(f"🚨 選択した{len(target_h_multi_v)}頭を物理抹消"):
-                if safe_update(df_t6_f[~df_t6_f['name'].isin(target_h_multi_v)]): st.rerun()
+                with st.spinner("スプレッドシートを更新中…"):
+                    ok_del_h = safe_update(df_t6_f[~df_t6_f['name'].isin(target_h_multi_v)])
+                if ok_del_h:
+                    st.rerun()
