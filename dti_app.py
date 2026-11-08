@@ -318,17 +318,28 @@ def parse_time_string_to_seconds(str_time_input):
 # 4.5 データ品質ガード（v3: 検証レイヤ）
 # ==============================================================================
 
+def _is_missing_scalar(val):
+    try:
+        return val is None or bool(pd.isna(val))
+    except (TypeError, ValueError):
+        return False
+
+
 def normalize_key_part(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    if _is_missing_scalar(val):
         return ""
     return str(val).strip()
 
 
 def date_key_from_value(dval):
-    if dval is None or (isinstance(dval, float) and pd.isna(dval)):
+    # NaT は strftime を持つが呼ぶと ValueError になるため先に除外する
+    if _is_missing_scalar(dval):
         return ""
     if hasattr(dval, "strftime"):
-        return dval.strftime("%Y-%m-%d")
+        try:
+            return dval.strftime("%Y-%m-%d")
+        except ValueError:
+            return ""
     s = str(dval).strip()
     return s[:10] if len(s) >= 10 else s
 
@@ -374,7 +385,7 @@ def collect_quality_violations(df_in, horse_names_filter=None):
         return violations
 
     df_q = df_q.copy()
-    df_q["_dup_key"] = df_q.apply(row_duplicate_key_tuple, axis=1)
+    df_q["_dup_key"] = [row_duplicate_key_tuple(r) for _, r in df_q.iterrows()]
     dup_sizes = df_q.groupby("_dup_key", dropna=False).size()
     for k, cnt in dup_sizes.items():
         if cnt > 1 and k[0]:
